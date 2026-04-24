@@ -33,3 +33,4 @@ async def test_qa_session_model(db):
     assert qa.fix_attempt == 0
     assert qa.ticket_id is None
     assert qa.started_at is None
+    assert qa.completed_at is None
