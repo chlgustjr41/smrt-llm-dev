@@ -1,4 +1,5 @@
 """APScheduler: nightly QA session per registered project at 03:00 local."""
+import asyncio
 import logging
 from typing import Awaitable, Callable
 
@@ -16,7 +17,6 @@ def start_scheduler(
     project_ids: list[int],
 ) -> AsyncIOScheduler | BackgroundScheduler:
     global _scheduler
-    import asyncio
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -25,6 +25,9 @@ def start_scheduler(
     if loop is not None and loop.is_running():
         _scheduler = AsyncIOScheduler()
     else:
+        # BackgroundScheduler is used only in sync test contexts where no event
+        # loop is running. trigger_fn must be sync-callable in that path; in
+        # production AsyncIOScheduler always runs and can await coroutines.
         _scheduler = BackgroundScheduler()
 
     for project_id in project_ids:

@@ -30,9 +30,9 @@ async def watch_project(
             continue
         now = time.monotonic()
         if now - last_trigger >= _DEBOUNCE_SECONDS:
-            last_trigger = now
             logger.info("File change in project %d — triggering QA session", project_id)
             try:
                 await trigger_fn(project_id)
+                last_trigger = now
             except Exception as exc:
                 logger.error("QA trigger failed for project %d: %s", project_id, exc)
