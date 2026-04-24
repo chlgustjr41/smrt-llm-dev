@@ -17,3 +17,7 @@ export function registerProject(name: string, path: string): Promise<Project> {
     body: JSON.stringify({ name, path }),
   })
 }
+
+export function getProject(id: number): Promise<Project> {
+  return apiFetch<Project>(`/projects/${id}`)
+}

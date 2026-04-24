@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { listProjects, registerProject, type Project } from '../api/projects'
 
 export function ProjectsPage() {
@@ -69,9 +70,14 @@ export function ProjectsPage() {
       ) : (
         <ul className="space-y-2">
           {projects.map((p) => (
-            <li key={p.id} className="border rounded p-3">
-              <span className="font-medium">{p.name}</span>
-              <span className="text-gray-500 text-sm ml-2">{p.canonical_path}</span>
+            <li key={p.id} className="border rounded p-3 flex items-center justify-between">
+              <Link
+                to={`/projects/${p.id}`}
+                className="font-medium text-blue-600 hover:underline"
+              >
+                {p.name}
+              </Link>
+              <span className="text-gray-500 text-sm">{p.canonical_path}</span>
             </li>
           ))}
         </ul>
