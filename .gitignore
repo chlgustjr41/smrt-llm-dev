@@ -1,0 +1,87 @@
+# ─── Secrets ────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+secrets.yaml
+secrets.yml
+
+# ─── Agent runtime artifacts ────────────────────────────────
+.smrt/runs/
+.smrt/sandbox/
+.smrt/state.db
+.smrt/state.db-journal
+.smrt/state.db-wal
+.smrt/state.db-shm
+
+# ─── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.tox/
+
+# ─── Node / Frontend ────────────────────────────────────────
+node_modules/
+.pnp.*
+.yarn/cache
+.yarn/install-state.gz
+.parcel-cache/
+.next/
+out/
+.nuxt/
+.cache/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# ─── Build outputs ──────────────────────────────────────────
+frontend/dist/
+frontend/build/
+backend/dist/
+
+# ─── IDE / OS ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Claude Code session-local settings (per-developer) ─────
+.claude/settings.local.json
+.claude/.credentials*
+
+# ─── Docker ─────────────────────────────────────────────────
+.docker/
+
+# ─── Eval fixtures: keep fixture source committed, ignore agent-managed state ─
+eval-fixtures/*/.smrt/
+eval-fixtures/wild/*
+!eval-fixtures/wild/README.md
+
+# Note: eval-fixtures/todo-api/BUGS.md IS committed to this meta repo (so evaluators
+# see the answer key), but it MUST be added to eval-fixtures/todo-api/.gitignore
+# (the target project's own gitignore) so the secret_guard_hook hides it from the agent.

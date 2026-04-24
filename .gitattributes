@@ -1,0 +1,38 @@
+# Normalize line endings across Windows / macOS / Linux contributors.
+# Ensures git stores LF in the repo regardless of host OS, and checks out
+# with the platform-native ending where it matters.
+
+# Default: auto-detect text files, normalize to LF in the repo
+* text=auto eol=lf
+
+# Source code — always LF
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.sql   text eol=lf
+Dockerfile* text eol=lf
+
+# Windows-only — CRLF (none in this repo today, but listed for clarity)
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary — never touched
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
