@@ -18,6 +18,7 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "anthropic>=0.40,<1",
     "python-multipart>=0.0.9",
+    "requests>=2.31,<3",
 ]
 
 [project.optional-dependencies]
