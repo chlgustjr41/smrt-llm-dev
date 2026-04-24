@@ -22,14 +22,24 @@ async def register_project(
 ) -> Project:
     settings = Settings()
 
-    # Reject paths outside the allowlist (when allowlist is configured)
+    # Canonicalize the submitted path
     canonical = canonicalize(body.path)
+
+    # Reject paths outside the allowlist (when allowlist is configured).
+    # Both the input and each root are canonicalized for consistent comparison.
     if settings.allowed_project_roots:
-        allowed = any(canonical.startswith(root) for root in settings.allowed_project_roots)
+        canonical_roots: list[str] = []
+        for root in settings.allowed_project_roots:
+            try:
+                canonical_roots.append(canonicalize(root))
+            except Exception:
+                canonical_roots.append(root)
+        allowed = any(canonical.startswith(root) for root in canonical_roots)
         if not allowed:
             raise HTTPException(status_code=400, detail="Path is not in the project root allowlist")
 
-    # Require the path to exist on disk
+    # Require the path to exist. /workspace paths are resolvable inside Docker;
+    # Windows-style paths submitted via the file browser are already /workspace/... form.
     if not Path(body.path).exists():
         raise HTTPException(status_code=400, detail=f"Path does not exist: {body.path}")
 

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from smrt_agent.settings import Settings
 from smrt_agent.db.session import get_engine
 from smrt_agent.db.schema import init_schema
+from smrt_agent.api.filesystem import router as filesystem_router
 from smrt_agent.api.projects import router as projects_router
 from smrt_agent.api.runs import router as runs_router
 from smrt_agent.api.sandbox import router as sandbox_router
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "version": app.version}
 
+    app.include_router(filesystem_router)
     app.include_router(projects_router)
     app.include_router(sandbox_router)
     app.include_router(runs_router)

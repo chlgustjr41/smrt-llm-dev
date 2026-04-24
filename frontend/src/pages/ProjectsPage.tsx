@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { listProjects, registerProject, type Project } from '../api/projects'
+import { FileBrowser } from '../components/FileBrowser'
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -8,6 +9,7 @@ export function ProjectsPage() {
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
+  const [showBrowser, setShowBrowser] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -45,16 +47,38 @@ export function ProjectsPage() {
           onChange={(e) => setName(e.target.value)}
           required
         />
-        <input
-          className="block w-full border rounded px-3 py-2"
-          placeholder="Absolute path to project"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          required
-        />
+
+        {/* Path picker */}
+        <div className="space-y-1">
+          <div className="flex gap-2">
+            <input
+              className="block flex-1 border rounded px-3 py-2 bg-gray-50"
+              placeholder="Select a folder below…"
+              value={path}
+              readOnly
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowBrowser((v) => !v)}
+              className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
+            >
+              {showBrowser ? 'Close' : 'Browse…'}
+            </button>
+          </div>
+          {showBrowser && (
+            <FileBrowser
+              onSelect={(selected) => {
+                setPath(selected)
+                setShowBrowser(false)
+              }}
+            />
+          )}
+        </div>
+
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !path}
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
         >
           {submitting ? 'Registering…' : 'Register project'}
