@@ -46,7 +46,15 @@ function EventRow({ event }: { event: SseEvent }) {
   }
 }
 
-export function LiveAgentView({ projectId, runId }: { projectId: number; runId: string }) {
+export function LiveAgentView({
+  projectId,
+  runId,
+  onComplete,
+}: {
+  projectId: number
+  runId: string
+  onComplete?: (status: string) => void
+}) {
   const [events, setEvents] = useState<SseEvent[]>([])
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
@@ -66,13 +74,16 @@ export function LiveAgentView({ projectId, runId }: { projectId: number; runId: 
         )
         setDone(true)
         es.close()
+        onComplete?.('done')
       } else if (event.type === 'budget_exceeded') {
         setSummary(`Budget limit reached ($${event.cost_usd?.toFixed(4)})`)
         setDone(true)
         es.close()
+        onComplete?.('error')
       } else if (event.type === 'error') {
         setDone(true)
         es.close()
+        onComplete?.('error')
       }
     }
 

@@ -16,9 +16,10 @@ interface QAEvent {
 interface Props {
   projectId: number
   sessionId: string
+  onComplete?: (status: string) => void
 }
 
-export function QASessionView({ projectId, sessionId }: Props) {
+export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const [events, setEvents] = useState<QAEvent[]>([])
   const [hitlTicket, setHitlTicket] = useState<string | null>(null)
   const [done, setDone] = useState(false)
@@ -41,6 +42,7 @@ export function QASessionView({ projectId, sessionId }: Props) {
       if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
         setDone(true)
         es.close()
+        onComplete?.(event.status ?? event.type)
       }
     }
 
