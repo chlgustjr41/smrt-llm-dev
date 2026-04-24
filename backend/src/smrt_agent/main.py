@@ -6,6 +6,7 @@ from smrt_agent.settings import Settings
 from smrt_agent.db.session import get_engine
 from smrt_agent.db.schema import init_schema
 from smrt_agent.api.projects import router as projects_router
+from smrt_agent.api.sandbox import router as sandbox_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "version": app.version}
 
     app.include_router(projects_router)
+    app.include_router(sandbox_router)
 
     return app
 
