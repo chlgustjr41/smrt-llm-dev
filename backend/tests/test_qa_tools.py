@@ -67,3 +67,16 @@ def test_qa_tool_definitions():
 def test_coder_tool_definitions():
     names = {t["name"] for t in CODER_TOOLS}
     assert names == {"list_files", "read_source_file", "write_source_file"}
+
+
+from pathlib import Path
+
+def test_qa_prompt_exists():
+    prompt = Path(__file__).parent.parent / "src/smrt_agent/prompts/qa.md"
+    assert prompt.exists(), "qa.md prompt missing"
+    assert len(prompt.read_text()) > 100
+
+def test_coder_prompt_exists():
+    prompt = Path(__file__).parent.parent / "src/smrt_agent/prompts/coder.md"
+    assert prompt.exists(), "coder.md prompt missing"
+    assert len(prompt.read_text()) > 100
