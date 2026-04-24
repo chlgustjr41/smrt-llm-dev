@@ -62,6 +62,7 @@ export function QASessionView({ projectId, sessionId }: Props) {
     setActioning(true)
     try {
       await approveQASession(projectId, sessionId)
+      setHitlTicket(null)
     } finally {
       setActioning(false)
     }
@@ -71,6 +72,7 @@ export function QASessionView({ projectId, sessionId }: Props) {
     setActioning(true)
     try {
       await skipQASession(projectId, sessionId)
+      setHitlTicket(null)
     } finally {
       setActioning(false)
     }

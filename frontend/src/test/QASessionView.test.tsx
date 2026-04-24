@@ -63,7 +63,7 @@ describe('QASessionView', () => {
     expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument()
   })
 
-  it('calls approve API when Approve clicked', async () => {
+  it('calls approve API when Approve clicked and hides HITL panel', async () => {
     const user = userEvent.setup()
     _sseScenario = [
       { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-001', fix_attempt: 0 },
@@ -72,10 +72,12 @@ describe('QASessionView', () => {
     render(<QASessionView projectId={1} sessionId="sess-1" />)
     await waitFor(() => screen.getByRole('button', { name: /approve fix/i }))
     await user.click(screen.getByRole('button', { name: /approve fix/i }))
-    // No error thrown = API call succeeded (MSW handler returns 200)
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /approve fix/i })).not.toBeInTheDocument()
+    )
   })
 
-  it('calls skip API when Skip clicked', async () => {
+  it('calls skip API when Skip clicked and hides HITL panel', async () => {
     const user = userEvent.setup()
     _sseScenario = [
       { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-001', fix_attempt: 0 },
@@ -84,6 +86,9 @@ describe('QASessionView', () => {
     render(<QASessionView projectId={1} sessionId="sess-1" />)
     await waitFor(() => screen.getByRole('button', { name: /skip/i }))
     await user.click(screen.getByRole('button', { name: /skip/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
+    )
   })
 
   it('shows session complete after done event', async () => {
