@@ -69,8 +69,6 @@ def test_coder_tool_definitions():
     assert names == {"list_files", "read_source_file", "write_source_file"}
 
 
-from pathlib import Path
-
 def test_qa_prompt_exists():
     prompt = Path(__file__).parent.parent / "src/smrt_agent/prompts/qa.md"
     assert prompt.exists(), "qa.md prompt missing"
@@ -87,7 +85,6 @@ from unittest.mock import patch, MagicMock
 from smrt_agent.agents.qa.loop import run_qa_agent
 
 
-@pytest.mark.asyncio
 async def test_run_qa_agent_no_project_md(tmp_path):
     """QA agent handles missing Project.md gracefully (uses fallback message)."""
     queue = asyncio.Queue()
@@ -119,3 +116,60 @@ async def test_run_qa_agent_no_project_md(tmp_path):
     while not queue.empty():
         events.append(await queue.get())
     assert any(e["type"] == "qa_done" for e in events)
+
+
+async def test_run_qa_agent_returns_ticket_id_from_tool_use(tmp_path):
+    """QA agent correctly propagates ticket_id returned by write_bug_ticket tool call."""
+    queue = asyncio.Queue()
+
+    # First response: tool_use calling write_bug_ticket
+    mock_tool_block = MagicMock()
+    mock_tool_block.type = "tool_use"
+    mock_tool_block.name = "write_bug_ticket"
+    mock_tool_block.id = "tool-1"
+    mock_tool_block.input = {
+        "title": "Test failure",
+        "description": "POST /items fails",
+        "test_output": "FAILED test_items",
+    }
+
+    mock_response_tool = MagicMock()
+    mock_response_tool.stop_reason = "tool_use"
+    mock_response_tool.content = [mock_tool_block]
+    mock_response_tool.usage.input_tokens = 10
+    mock_response_tool.usage.output_tokens = 5
+
+    # Second response: end_turn
+    mock_response_end = MagicMock()
+    mock_response_end.stop_reason = "end_turn"
+    mock_response_end.content = []
+    mock_response_end.usage.input_tokens = 10
+    mock_response_end.usage.output_tokens = 5
+
+    def make_stream(response):
+        s = MagicMock()
+        s.__iter__ = MagicMock(return_value=iter([]))
+        s.get_final_message = MagicMock(return_value=response)
+        s.__enter__ = MagicMock(return_value=s)
+        s.__exit__ = MagicMock(return_value=False)
+        return s
+
+    responses = [mock_response_tool, mock_response_end]
+    stream_iter = iter([make_stream(r) for r in responses])
+
+    with patch("smrt_agent.agents.qa.loop.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.stream.side_effect = lambda **kw: next(stream_iter)
+        ticket_id = await run_qa_agent(
+            project_path=tmp_path,
+            api_key="sk-test",
+            model="claude-sonnet-4-6",
+            budget_usd=1.0,
+            queue=queue,
+        )
+
+    # ticket_id should be the YYYY-MM-DD-NNN string written by write_bug_ticket
+    assert ticket_id is not None
+    assert ticket_id.count("-") >= 3
+    # The ticket file should exist on disk
+    tickets_dir = tmp_path / ".smrt" / "tickets"
+    assert any(tickets_dir.glob(f"{ticket_id}.md"))

@@ -62,7 +62,6 @@ from unittest.mock import patch, MagicMock
 from smrt_agent.agents.coder.loop import run_coder_agent
 
 
-@pytest.mark.asyncio
 async def test_run_coder_agent_end_turn(tmp_path):
     queue = asyncio.Queue()
 
@@ -94,3 +93,60 @@ async def test_run_coder_agent_end_turn(tmp_path):
     while not queue.empty():
         events.append(await queue.get())
     assert any(e["type"] == "coder_done" for e in events)
+
+
+async def test_run_coder_agent_tool_use_writes_file(tmp_path):
+    """Coder agent writes a source file when the model calls write_source_file."""
+    queue = asyncio.Queue()
+
+    mock_tool_block = MagicMock()
+    mock_tool_block.type = "tool_use"
+    mock_tool_block.name = "write_source_file"
+    mock_tool_block.id = "tool-1"
+    mock_tool_block.input = {"path": "src/fixed.py", "content": "x = 42\n"}
+
+    mock_response_tool = MagicMock()
+    mock_response_tool.stop_reason = "tool_use"
+    mock_response_tool.content = [mock_tool_block]
+    mock_response_tool.usage.input_tokens = 10
+    mock_response_tool.usage.output_tokens = 5
+
+    mock_response_end = MagicMock()
+    mock_response_end.stop_reason = "end_turn"
+    mock_response_end.content = []
+    mock_response_end.usage.input_tokens = 5
+    mock_response_end.usage.output_tokens = 3
+
+    def make_stream(response):
+        s = MagicMock()
+        s.__iter__ = MagicMock(return_value=iter([]))
+        s.get_final_message = MagicMock(return_value=response)
+        s.__enter__ = MagicMock(return_value=s)
+        s.__exit__ = MagicMock(return_value=False)
+        return s
+
+    responses = [mock_response_tool, mock_response_end]
+    stream_iter = iter([make_stream(r) for r in responses])
+
+    with patch("smrt_agent.agents.coder.loop.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.stream.side_effect = lambda **kw: next(stream_iter)
+        await run_coder_agent(
+            project_path=tmp_path,
+            api_key="sk-test",
+            model="claude-sonnet-4-6",
+            budget_usd=1.0,
+            queue=queue,
+            ticket_content="# Bug: broken",
+            pytest_output="FAILED",
+        )
+
+    # The file should have been written to disk
+    assert (tmp_path / "src" / "fixed.py").read_text(encoding="utf-8") == "x = 42\n"
+    # Queue should contain tool_use, tool_result, coder_done events
+    events = []
+    while not queue.empty():
+        events.append(await queue.get())
+    types = [e["type"] for e in events]
+    assert "tool_use" in types
+    assert "tool_result" in types
+    assert "coder_done" in types

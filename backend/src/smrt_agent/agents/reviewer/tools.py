@@ -65,5 +65,5 @@ def write_file(project_path: Path, rel_path: str, content: str) -> str:
     if not target.is_relative_to(root):
         raise PermissionError(f"Path traversal denied: {rel_path!r}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
+    target.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} bytes to {rel_path}"

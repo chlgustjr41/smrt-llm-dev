@@ -12,7 +12,7 @@ from smrt_agent.agents.reviewer.tools import fetch_url, list_files, read_file, w
 
 def _load_system_prompt() -> str:
     prompt_path = Path(__file__).parent.parent.parent / "prompts" / "reviewer.md"
-    return prompt_path.read_text()
+    return prompt_path.read_text(encoding="utf-8")
 
 
 def _dispatch_tool(name: str, inputs: dict[str, Any], project_path: Path) -> str:
