@@ -55,3 +55,42 @@ def test_write_source_file_blocks_tests(tmp_path):
 def test_write_source_file_blocks_docs(tmp_path):
     with pytest.raises(PermissionError, match="docs"):
         write_source_file(tmp_path, "docs/README.md", "bad")
+
+
+import asyncio
+from unittest.mock import patch, MagicMock
+from smrt_agent.agents.coder.loop import run_coder_agent
+
+
+@pytest.mark.asyncio
+async def test_run_coder_agent_end_turn(tmp_path):
+    queue = asyncio.Queue()
+
+    mock_response = MagicMock()
+    mock_response.stop_reason = "end_turn"
+    mock_response.content = []
+    mock_response.usage.input_tokens = 10
+    mock_response.usage.output_tokens = 5
+
+    mock_stream = MagicMock()
+    mock_stream.__iter__ = MagicMock(return_value=iter([]))
+    mock_stream.get_final_message = MagicMock(return_value=mock_response)
+    mock_stream.__enter__ = MagicMock(return_value=mock_stream)
+    mock_stream.__exit__ = MagicMock(return_value=False)
+
+    with patch("smrt_agent.agents.coder.loop.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.stream.return_value = mock_stream
+        await run_coder_agent(
+            project_path=tmp_path,
+            api_key="sk-test",
+            model="claude-sonnet-4-6",
+            budget_usd=1.0,
+            queue=queue,
+            ticket_content="# Bug: 500 on POST /items",
+            pytest_output="FAILED test_items::test_create_item",
+        )
+
+    events = []
+    while not queue.empty():
+        events.append(await queue.get())
+    assert any(e["type"] == "coder_done" for e in events)
