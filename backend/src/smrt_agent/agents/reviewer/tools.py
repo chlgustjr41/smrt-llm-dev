@@ -44,7 +44,7 @@ def read_file(project_path: Path, rel_path: str) -> str:
         raise PermissionError(f"Secret file access denied: {rel_path!r}")
     target = (project_path / rel_path).resolve()
     root = project_path.resolve()
-    if not str(target).startswith(str(root)):
+    if not target.is_relative_to(root):
         raise PermissionError(f"Path traversal denied: {rel_path!r}")
     return target.read_text(errors="replace")
 
@@ -62,7 +62,7 @@ def write_file(project_path: Path, rel_path: str, content: str) -> str:
         raise PermissionError(f"write_file may only write inside .smrt/: {rel_path!r}")
     target = (project_path / rel_path).resolve()
     root = project_path.resolve()
-    if not str(target).startswith(str(root)):
+    if not target.is_relative_to(root):
         raise PermissionError(f"Path traversal denied: {rel_path!r}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
