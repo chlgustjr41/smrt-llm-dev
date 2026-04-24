@@ -73,3 +73,9 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => expect(screen.getAllByText(/test-run-uuid-1234/i).length).toBeGreaterThan(0))
   })
 })
+
+import { createQASession } from '../api/qa_sessions'
+
+it('qa_sessions api module exports createQASession', () => {
+  expect(typeof createQASession).toBe('function')
+})
