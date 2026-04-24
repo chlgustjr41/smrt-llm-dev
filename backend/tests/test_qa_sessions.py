@@ -99,3 +99,57 @@ async def test_orchestrator_skip_on_hitl_skip(tmp_path):
         )
 
     assert status == "skipped"
+
+
+import pytest
+from httpx import AsyncClient, ASGITransport
+from unittest.mock import patch, AsyncMock
+from smrt_agent.main import create_app
+from smrt_agent.db.session import get_engine, get_session_factory
+from smrt_agent.db.schema import init_schema
+from smrt_agent.db.models import Project
+from smrt_agent.api.deps import get_db
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+@pytest.fixture
+async def app_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("SMRT_DB_PATH", str(tmp_path / "test.db"))
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
+    await init_schema(engine)
+    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    app = create_app()
+
+    async def override_get_db():
+        async with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+    await engine.dispose()
+
+
+async def test_create_qa_session_404(app_client):
+    resp = await app_client.post("/projects/9999/qa-sessions")
+    assert resp.status_code == 404
+
+
+async def test_stream_qa_session_404(app_client):
+    resp = await app_client.get("/projects/1/qa-sessions/nonexistent/stream")
+    assert resp.status_code == 404
+
+
+async def test_approve_no_hitl_pending(app_client):
+    resp = await app_client.post("/projects/1/qa-sessions/nonexistent/approve")
+    assert resp.status_code == 409
+
+
+async def test_skip_no_hitl_pending(app_client):
+    resp = await app_client.post("/projects/1/qa-sessions/nonexistent/skip")
+    assert resp.status_code == 409
