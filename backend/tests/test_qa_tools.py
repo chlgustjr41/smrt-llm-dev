@@ -54,3 +54,16 @@ def test_append_bugs_resolved(tmp_path):
     assert "2026-04-24-002" in content
     assert "Fixed null pointer" in content
     assert "Fixed second bug" in content
+
+
+from smrt_agent.agents.qa.budget import TOOL_DEFINITIONS as QA_TOOLS
+from smrt_agent.agents.coder.budget import TOOL_DEFINITIONS as CODER_TOOLS
+
+def test_qa_tool_definitions():
+    names = {t["name"] for t in QA_TOOLS}
+    assert names == {"list_files", "read_file", "write_test_file", "run_pytest",
+                     "write_bug_ticket", "write_test_status", "append_bugs_resolved"}
+
+def test_coder_tool_definitions():
+    names = {t["name"] for t in CODER_TOOLS}
+    assert names == {"list_files", "read_source_file", "write_source_file"}
