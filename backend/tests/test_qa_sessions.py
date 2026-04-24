@@ -1,11 +1,15 @@
 import asyncio
 import pytest
 from unittest.mock import patch, AsyncMock
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from httpx import AsyncClient, ASGITransport
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 from smrt_agent.db.base import Base
 from smrt_agent.db.models import Project, QASession
 from smrt_agent.agents.orchestrator import run_qa_session
+from smrt_agent.main import create_app
+from smrt_agent.db.schema import init_schema
+from smrt_agent.api.deps import get_db
 
 
 @pytest.fixture
@@ -99,17 +103,6 @@ async def test_orchestrator_skip_on_hitl_skip(tmp_path):
         )
 
     assert status == "skipped"
-
-
-import pytest
-from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, AsyncMock
-from smrt_agent.main import create_app
-from smrt_agent.db.session import get_engine, get_session_factory
-from smrt_agent.db.schema import init_schema
-from smrt_agent.db.models import Project
-from smrt_agent.api.deps import get_db
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 @pytest.fixture
