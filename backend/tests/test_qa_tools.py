@@ -1,4 +1,3 @@
-import subprocess
 import pytest
 from pathlib import Path
 from smrt_agent.agents.qa.tools import (
@@ -49,6 +48,9 @@ def test_write_test_status(tmp_path):
 
 def test_append_bugs_resolved(tmp_path):
     append_bugs_resolved(tmp_path, "2026-04-24-001", "Fixed null pointer")
+    append_bugs_resolved(tmp_path, "2026-04-24-002", "Fixed second bug")
     content = (tmp_path / ".smrt" / "bugs-resolved.md").read_text()
     assert "2026-04-24-001" in content
+    assert "2026-04-24-002" in content
     assert "Fixed null pointer" in content
+    assert "Fixed second bug" in content
