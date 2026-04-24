@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom'
 import { getProject, listRuns, type Project, type AgentRunSummary } from '../api/projects'
 import { createRun } from '../api/runs'
 import { LiveAgentView } from '../components/LiveAgentView'
+import { createQASession } from '../api/qa_sessions'
+import { QASessionView } from '../components/QASessionView'
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -14,6 +16,8 @@ export function ProjectDetailPage() {
   const [runId, setRunId] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [pastRuns, setPastRuns] = useState<AgentRunSummary[]>([])
+  const [qaSessionId, setQaSessionId] = useState<string | null>(null)
+  const [startingQA, setStartingQA] = useState(false)
 
   useEffect(() => {
     Promise.all([getProject(projectId), listRuns(projectId)])
@@ -40,6 +44,19 @@ export function ProjectDetailPage() {
       setError(e instanceof Error ? e.message : 'Failed to start run')
     } finally {
       setStarting(false)
+    }
+  }
+
+  async function handleRunQA() {
+    setStartingQA(true)
+    setError(null)
+    try {
+      const session = await createQASession(projectId)
+      setQaSessionId(session.session_id)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to start QA session')
+    } finally {
+      setStartingQA(false)
     }
   }
 
@@ -126,6 +143,23 @@ export function ProjectDetailPage() {
           </table>
         </div>
       )}
+
+      <div className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          QA / Test Session
+        </h2>
+        {!qaSessionId ? (
+          <button
+            onClick={handleRunQA}
+            disabled={startingQA}
+            className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-50"
+          >
+            {startingQA ? 'Starting…' : 'Run QA Session'}
+          </button>
+        ) : (
+          <QASessionView projectId={projectId} sessionId={qaSessionId} />
+        )}
+      </div>
     </div>
   )
 }
