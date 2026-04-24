@@ -18,6 +18,7 @@ class Project(Base):
     )
 
     runs: Mapped[list["AgentRun"]] = relationship("AgentRun", back_populates="project")
+    qa_sessions: Mapped[list["QASession"]] = relationship("QASession", back_populates="project")
 
 
 class AgentRun(Base):
@@ -35,3 +36,20 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     project: Mapped["Project"] = relationship("Project", back_populates="runs")
+
+
+class QASession(Base):
+    __tablename__ = "qa_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    fix_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ticket_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    project: Mapped["Project"] = relationship("Project", back_populates="qa_sessions")

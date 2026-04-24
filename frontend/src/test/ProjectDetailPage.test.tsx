@@ -24,6 +24,7 @@ const mockProject = {
 
 const server = setupServer(
   http.get('http://localhost/api/projects/1', () => HttpResponse.json(mockProject)),
+  http.get('http://localhost/api/projects/1/runs', () => HttpResponse.json([])),
   http.post('http://localhost/api/projects/1/runs', () =>
     HttpResponse.json({ run_id: 'test-run-uuid-1234', status: 'pending' }, { status: 202 }),
   ),
@@ -69,6 +70,38 @@ describe('ProjectDetailPage', () => {
     renderDetailPage()
     await waitFor(() => screen.getByRole('button', { name: /run init audit/i }))
     await user.click(screen.getByRole('button', { name: /run init audit/i }))
-    await waitFor(() => expect(screen.getByText(/test-run-uuid-1234/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText(/test-run-uuid-1234/i).length).toBeGreaterThan(0))
   })
+})
+
+import { createQASession } from '../api/qa_sessions'
+
+it('qa_sessions api module exports createQASession', () => {
+  expect(typeof createQASession).toBe('function')
+})
+
+vi.mock('../components/QASessionView', () => ({
+  QASessionView: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="qa-view">{sessionId}</div>
+  ),
+}))
+
+it('shows Run QA Session button', async () => {
+  renderDetailPage()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /run qa session/i })).toBeInTheDocument()
+  )
+})
+
+it('starts a QA session when button clicked', async () => {
+  server.use(
+    http.post('http://localhost/api/projects/1/qa-sessions', () =>
+      HttpResponse.json({ session_id: 'qa-sess-uuid-5678', status: 'pending' }, { status: 202 }),
+    ),
+  )
+  const user = userEvent.setup()
+  renderDetailPage()
+  await waitFor(() => screen.getByRole('button', { name: /run qa session/i }))
+  await user.click(screen.getByRole('button', { name: /run qa session/i }))
+  await waitFor(() => expect(screen.getByTestId('qa-view')).toBeInTheDocument())
 })
