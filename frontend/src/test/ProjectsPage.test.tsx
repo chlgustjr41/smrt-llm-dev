@@ -1,10 +1,18 @@
-import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { MemoryRouter } from 'react-router-dom'
 import { ProjectsPage } from '../pages/ProjectsPage'
+
+// Stub FileBrowser so the registration test doesn't need real filesystem API.
+// It renders a single button that calls onSelect with a fixed path.
+vi.mock('../components/FileBrowser', () => ({
+  FileBrowser: ({ onSelect }: { onSelect: (path: string) => void }) => (
+    <button onClick={() => onSelect('/workspace/test-project')}>Pick folder</button>
+  ),
+}))
 
 const mockProjects = [
   { id: 1, name: 'todo-api', canonical_path: '/d/projects/todo-api', created_at: '2026-04-23T00:00:00Z' },
@@ -46,7 +54,9 @@ describe('ProjectsPage', () => {
     await waitFor(() => screen.getByText('todo-api'))
 
     await user.type(screen.getByPlaceholderText(/project name/i), 'my-app')
-    await user.type(screen.getByPlaceholderText(/absolute path/i), '/d/projects/my-app')
+    // Open the file browser stub and select a folder
+    await user.click(screen.getByRole('button', { name: /browse/i }))
+    await user.click(screen.getByRole('button', { name: /pick folder/i }))
     await user.click(screen.getByRole('button', { name: /register project/i }))
 
     await waitFor(() => expect(screen.getByText('my-app')).toBeInTheDocument())

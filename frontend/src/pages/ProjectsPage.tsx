@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { listProjects, registerProject, type Project } from '../api/projects'
+import { listProjects, registerProject, deleteProject, type Project } from '../api/projects'
 import { FileBrowser } from '../components/FileBrowser'
 
 export function ProjectsPage() {
@@ -11,6 +11,7 @@ export function ProjectsPage() {
   const [path, setPath] = useState('')
   const [showBrowser, setShowBrowser] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [deleting, setDeleting] = useState<number | null>(null)
 
   useEffect(() => {
     listProjects()
@@ -18,6 +19,19 @@ export function ProjectsPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  async function handleDelete(id: number) {
+    if (!confirm('Delete this project and all its runs?')) return
+    setDeleting(id)
+    try {
+      await deleteProject(id)
+      setProjects((prev) => prev.filter((p) => p.id !== id))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Delete failed')
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
@@ -94,14 +108,23 @@ export function ProjectsPage() {
       ) : (
         <ul className="space-y-2">
           {projects.map((p) => (
-            <li key={p.id} className="border rounded p-3 flex items-center justify-between">
-              <Link
-                to={`/projects/${p.id}`}
-                className="font-medium text-blue-600 hover:underline"
+            <li key={p.id} className="border rounded p-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Link
+                  to={`/projects/${p.id}`}
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  {p.name}
+                </Link>
+                <p className="text-gray-400 text-xs truncate">{p.canonical_path}</p>
+              </div>
+              <button
+                onClick={() => handleDelete(p.id)}
+                disabled={deleting === p.id}
+                className="shrink-0 text-sm text-red-500 hover:text-red-700 disabled:opacity-40"
               >
-                {p.name}
-              </Link>
-              <span className="text-gray-500 text-sm">{p.canonical_path}</span>
+                {deleting === p.id ? '…' : 'Delete'}
+              </button>
             </li>
           ))}
         </ul>

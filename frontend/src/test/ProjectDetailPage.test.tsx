@@ -24,6 +24,7 @@ const mockProject = {
 
 const server = setupServer(
   http.get('http://localhost/api/projects/1', () => HttpResponse.json(mockProject)),
+  http.get('http://localhost/api/projects/1/runs', () => HttpResponse.json([])),
   http.post('http://localhost/api/projects/1/runs', () =>
     HttpResponse.json({ run_id: 'test-run-uuid-1234', status: 'pending' }, { status: 202 }),
   ),
@@ -69,6 +70,6 @@ describe('ProjectDetailPage', () => {
     renderDetailPage()
     await waitFor(() => screen.getByRole('button', { name: /run init audit/i }))
     await user.click(screen.getByRole('button', { name: /run init audit/i }))
-    await waitFor(() => expect(screen.getByText(/test-run-uuid-1234/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText(/test-run-uuid-1234/i).length).toBeGreaterThan(0))
   })
 })
