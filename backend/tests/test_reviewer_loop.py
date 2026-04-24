@@ -140,3 +140,46 @@ async def test_run_reviewer_stops_on_budget_exceeded(project_path):
 
     types = [e["type"] for e in events]
     assert "budget_exceeded" in types
+
+
+async def test_run_reviewer_tool_events_have_ts_and_agent(project_path):
+    queue: asyncio.Queue = asyncio.Queue()
+
+    call_count = 0
+
+    def stream_side_effect(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        s = MagicMock()
+        s.__enter__ = MagicMock(return_value=s)
+        s.__exit__ = MagicMock(return_value=False)
+        s.__iter__ = MagicMock(return_value=iter([]))
+        if call_count == 1:
+            s.get_final_message = MagicMock(return_value=_make_tool_use_response("list_files", {"subdir": ""}))
+        else:
+            s.get_final_message = MagicMock(return_value=_make_end_turn_response())
+        return s
+
+    mock_client = MagicMock()
+    mock_client.messages.stream = MagicMock(side_effect=stream_side_effect)
+
+    with patch("smrt_agent.agents.reviewer.loop.anthropic.Anthropic", return_value=mock_client):
+        await run_reviewer(
+            project_path=project_path,
+            api_key="test-key",
+            model="claude-sonnet-4-6",
+            budget_usd=1.50,
+            queue=queue,
+        )
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    tool_events = [e for e in events if e["type"] in ("tool_use", "tool_result")]
+    assert len(tool_events) >= 2, "Expected at least one tool_use + tool_result pair"
+
+    for evt in tool_events:
+        assert "ts" in evt, f"Event {evt['type']} missing 'ts' field"
+        assert "agent" in evt, f"Event {evt['type']} missing 'agent' field"
+        assert evt["agent"] == "reviewer"

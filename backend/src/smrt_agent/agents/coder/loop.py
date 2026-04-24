@@ -1,6 +1,7 @@
 """Anthropic SDK streaming loop for the Coder agent."""
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,10 @@ import anthropic
 from smrt_agent.agents.coder.budget import TOOL_DEFINITIONS, compute_cost_usd
 from smrt_agent.agents.coder.tools import read_source_file, write_source_file
 from smrt_agent.agents.reviewer.tools import list_files
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _load_system_prompt() -> str:
@@ -65,7 +70,12 @@ async def run_coder_agent(
                 if hasattr(event, "type") and event.type == "content_block_delta":
                     delta = getattr(event, "delta", None)
                     if delta and getattr(delta, "type", None) == "text_delta":
-                        await queue.put({"type": "coder_text_delta", "text": delta.text})
+                        await queue.put({
+                            "type": "coder_text_delta",
+                            "text": delta.text,
+                            "agent": "coder",
+                            "ts": _ts(),
+                        })
             response = stream.get_final_message()
 
         total_input += response.usage.input_tokens
@@ -78,6 +88,7 @@ async def run_coder_agent(
                 "cost_usd": round(cost, 4),
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
+                "ts": _ts(),
             })
             return
 
@@ -87,6 +98,7 @@ async def run_coder_agent(
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
                 "cost_usd": round(cost, 4),
+                "ts": _ts(),
             })
             return
 
@@ -99,13 +111,15 @@ async def run_coder_agent(
                         "agent": "coder",
                         "tool": block.name,
                         "input": block.input,
+                        "ts": _ts(),
                     })
                     result = _dispatch_tool(block.name, block.input, project_path)
                     await queue.put({
                         "type": "tool_result",
                         "agent": "coder",
                         "tool": block.name,
-                        "result": result[:500],
+                        "result": result[:2000],
+                        "ts": _ts(),
                     })
                     tool_results.append({
                         "type": "tool_result",
@@ -119,5 +133,6 @@ async def run_coder_agent(
         await queue.put({
             "type": "error",
             "message": f"Coder unexpected stop_reason: {response.stop_reason}",
+            "ts": _ts(),
         })
         return

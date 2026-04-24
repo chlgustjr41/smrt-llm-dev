@@ -1,6 +1,7 @@
 """Anthropic SDK streaming loop for the Reviewer agent."""
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,10 @@ import anthropic
 
 from smrt_agent.agents.reviewer.budget import TOOL_DEFINITIONS, compute_cost_usd
 from smrt_agent.agents.reviewer.tools import fetch_url, list_files, read_file, write_file
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _load_system_prompt() -> str:
@@ -65,7 +70,12 @@ async def run_reviewer(
                 if hasattr(event, "type") and event.type == "content_block_delta":
                     delta = getattr(event, "delta", None)
                     if delta and getattr(delta, "type", None) == "text_delta":
-                        await queue.put({"type": "text_delta", "text": delta.text})
+                        await queue.put({
+                            "type": "text_delta",
+                            "text": delta.text,
+                            "agent": "reviewer",
+                            "ts": _ts(),
+                        })
 
             response = stream.get_final_message()
 
@@ -79,6 +89,7 @@ async def run_reviewer(
                 "cost_usd": round(cost, 4),
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
+                "ts": _ts(),
             })
             return
 
@@ -88,6 +99,7 @@ async def run_reviewer(
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
                 "cost_usd": round(cost, 4),
+                "ts": _ts(),
             })
             return
 
@@ -97,14 +109,18 @@ async def run_reviewer(
                 if getattr(block, "type", None) == "tool_use":
                     await queue.put({
                         "type": "tool_use",
+                        "agent": "reviewer",
                         "tool": block.name,
                         "input": block.input,
+                        "ts": _ts(),
                     })
                     result = _dispatch_tool(block.name, block.input, project_path)
                     await queue.put({
                         "type": "tool_result",
+                        "agent": "reviewer",
                         "tool": block.name,
-                        "result": result[:500],
+                        "result": result[:2000],
+                        "ts": _ts(),
                     })
                     tool_results.append({
                         "type": "tool_result",
@@ -119,5 +135,6 @@ async def run_reviewer(
         await queue.put({
             "type": "error",
             "message": f"Unexpected stop_reason: {response.stop_reason}",
+            "ts": _ts(),
         })
         return

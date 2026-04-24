@@ -1,6 +1,7 @@
 """Anthropic SDK streaming loop for the QA agent."""
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,10 @@ from smrt_agent.agents.qa.tools import (
     write_test_status, append_bugs_resolved,
 )
 from smrt_agent.agents.reviewer.tools import list_files, read_file
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _load_system_prompt() -> str:
@@ -89,7 +94,12 @@ async def run_qa_agent(
                 if hasattr(event, "type") and event.type == "content_block_delta":
                     delta = getattr(event, "delta", None)
                     if delta and getattr(delta, "type", None) == "text_delta":
-                        await queue.put({"type": "qa_text_delta", "text": delta.text})
+                        await queue.put({
+                            "type": "qa_text_delta",
+                            "text": delta.text,
+                            "agent": "qa",
+                            "ts": _ts(),
+                        })
             response = stream.get_final_message()
 
         total_input += response.usage.input_tokens
@@ -102,6 +112,7 @@ async def run_qa_agent(
                 "cost_usd": round(cost, 4),
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
+                "ts": _ts(),
             })
             return last_ticket_id
 
@@ -112,6 +123,7 @@ async def run_qa_agent(
                 "total_output_tokens": total_output,
                 "cost_usd": round(cost, 4),
                 "ticket_id": last_ticket_id,
+                "ts": _ts(),
             })
             return last_ticket_id
 
@@ -124,6 +136,7 @@ async def run_qa_agent(
                         "agent": "qa",
                         "tool": block.name,
                         "input": block.input,
+                        "ts": _ts(),
                     })
                     result, ticket_id = _dispatch_tool(block.name, block.input, project_path)
                     if ticket_id:
@@ -132,7 +145,8 @@ async def run_qa_agent(
                         "type": "tool_result",
                         "agent": "qa",
                         "tool": block.name,
-                        "result": result[:500],
+                        "result": result[:2000],
+                        "ts": _ts(),
                     })
                     tool_results.append({
                         "type": "tool_result",
@@ -146,5 +160,6 @@ async def run_qa_agent(
         await queue.put({
             "type": "error",
             "message": f"QA agent unexpected stop_reason: {response.stop_reason}",
+            "ts": _ts(),
         })
         return last_ticket_id
