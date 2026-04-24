@@ -11,6 +11,7 @@ from smrt_agent.api.deps import get_db
 async def test_app(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setenv("SMRT_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("SMRT_PROJECT_ROOT_ALLOWLIST", "")  # disable allowlist in tests
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     await init_schema(engine)

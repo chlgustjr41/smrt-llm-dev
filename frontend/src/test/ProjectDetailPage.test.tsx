@@ -1,0 +1,74 @@
+import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
+import { setupServer } from 'msw/node'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ProjectDetailPage } from '../pages/ProjectDetailPage'
+
+// Stub EventSource so LiveAgentView doesn't crash in jsdom
+class NoopEventSource {
+  onmessage: null = null
+  onerror: null = null
+  constructor(_url: string) {}
+  close() {}
+}
+vi.stubGlobal('EventSource', NoopEventSource)
+
+const mockProject = {
+  id: 1,
+  name: 'todo-api',
+  canonical_path: '/workspace/eval-fixtures/todo-api',
+  created_at: '2026-04-24T00:00:00Z',
+}
+
+const server = setupServer(
+  http.get('http://localhost/api/projects/1', () => HttpResponse.json(mockProject)),
+  http.post('http://localhost/api/projects/1/runs', () =>
+    HttpResponse.json({ run_id: 'test-run-uuid-1234', status: 'pending' }, { status: 202 }),
+  ),
+)
+
+beforeAll(() => server.listen())
+afterEach(() => server.resetHandlers())
+afterAll(() => server.close())
+
+function renderDetailPage(id = '1') {
+  return render(
+    <MemoryRouter initialEntries={[`/projects/${id}`]}>
+      <Routes>
+        <Route path="/projects/:id" element={<ProjectDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+describe('ProjectDetailPage', () => {
+  it('shows loading then project name', async () => {
+    renderDetailPage()
+    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('todo-api')).toBeInTheDocument())
+  })
+
+  it('shows canonical path', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByText('/workspace/eval-fixtures/todo-api')).toBeInTheDocument(),
+    )
+  })
+
+  it('shows Run Init Audit button', async () => {
+    renderDetailPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /run init audit/i })).toBeInTheDocument(),
+    )
+  })
+
+  it('starts a run when button is clicked and shows run id', async () => {
+    const user = userEvent.setup()
+    renderDetailPage()
+    await waitFor(() => screen.getByRole('button', { name: /run init audit/i }))
+    await user.click(screen.getByRole('button', { name: /run init audit/i }))
+    await waitFor(() => expect(screen.getByText(/test-run-uuid-1234/i)).toBeInTheDocument())
+  })
+})
