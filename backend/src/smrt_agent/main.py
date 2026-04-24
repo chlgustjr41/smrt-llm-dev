@@ -3,10 +3,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from smrt_agent.settings import Settings
+from smrt_agent.db.session import get_engine
+from smrt_agent.db.schema import init_schema
+from smrt_agent.api.projects import router as projects_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    engine = get_engine()
+    await init_schema(engine)
     yield
 
 
@@ -29,6 +34,8 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok", "version": app.version}
+
+    app.include_router(projects_router)
 
     return app
 
