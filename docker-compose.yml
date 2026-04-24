@@ -6,16 +6,25 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/tests:/app/tests
+      - smrt-db:/app/.smrt
+      # Mount workspace so the backend can see host project paths
+      - .:/workspace:ro
+      # Docker socket so the backend can build/run sandbox containers
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "127.0.0.1:8000:8000"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - SMRT_BIND_HOST=0.0.0.0
       - SMRT_DB_PATH=/app/.smrt/state.db
+      - SMRT_PROJECT_ROOT_ALLOWLIST=/workspace
     env_file:
       - .env
     command: uvicorn smrt_agent.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
+    networks:
+      - default
+      - smrt-internal
 
   frontend:
     build:
@@ -28,3 +37,11 @@ services:
       - "127.0.0.1:5173:5173"
     command: npm run dev -- --host 0.0.0.0
     restart: unless-stopped
+
+volumes:
+  smrt-db:
+
+networks:
+  default: {}
+  smrt-internal:
+    external: true

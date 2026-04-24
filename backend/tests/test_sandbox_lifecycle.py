@@ -11,13 +11,16 @@ from smrt_agent.sandbox.lifecycle import (
 
 
 def test_generate_dockerfile_creates_file(tmp_path):
+    import tempfile, hashlib
     canonical = str(tmp_path)
-    generate_dockerfile(canonical)
-    df = tmp_path / ".smrt" / "sandbox" / "Dockerfile"
+    df = generate_dockerfile(canonical)
     assert df.exists()
     content = df.read_text()
     assert "FROM python:3.11-slim" in content
     assert "EXPOSE 8080" in content
+    # Verify it's in the temp staging area, not inside the project
+    path_hash = hashlib.sha1(canonical.encode()).hexdigest()[:12]
+    assert path_hash in str(df)
 
 
 def test_build_image_calls_docker_build(tmp_path):

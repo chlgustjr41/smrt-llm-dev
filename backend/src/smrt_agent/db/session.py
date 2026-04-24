@@ -13,7 +13,9 @@ _engine: AsyncEngine | None = None
 def _resolve_db_path() -> Path:
     custom = os.getenv("SMRT_DB_PATH")
     if custom:
-        return Path(custom)
+        p = Path(custom)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
     home = Path.home() / ".smrt"
     home.mkdir(parents=True, exist_ok=True)
     return home / "state.db"

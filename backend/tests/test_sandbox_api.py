@@ -45,6 +45,7 @@ async def test_start_sandbox_returns_200_on_success(app_with_project):
     mock_container.id = "abc123"
     mock_container.ports = {"8080/tcp": [{"HostPort": "18080"}]}
     mock_container.reload = MagicMock()
+    mock_container.attrs = {"NetworkSettings": {"Networks": {"smrt-internal": {"IPAddress": "172.20.0.5"}}}}
 
     with (
         patch("smrt_agent.api.sandbox.generate_dockerfile"),
@@ -60,6 +61,7 @@ async def test_start_sandbox_returns_200_on_success(app_with_project):
     body = resp.json()
     assert body["healthy"] is True
     assert body["container_id"] == "abc123"
+    assert "container_ip" in body
 
 
 @pytest.mark.asyncio

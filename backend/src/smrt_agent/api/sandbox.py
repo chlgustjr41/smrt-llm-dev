@@ -21,7 +21,7 @@ router = APIRouter(prefix="/projects", tags=["sandbox"])
 class SandboxStartResponse(BaseModel):
     container_id: str
     healthy: bool
-    port: int | None
+    container_ip: str | None
 
 
 @router.post("/{project_id}/sandbox/start", response_model=SandboxStartResponse)
@@ -45,11 +45,14 @@ async def start_sandbox(
     if not healthy:
         raise HTTPException(status_code=500, detail="Sandbox started but failed health-check")
 
-    port_bindings = container.ports.get("8080/tcp") or []
-    host_port = int(port_bindings[0]["HostPort"]) if port_bindings else None
+    container.reload()
+    networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+    from smrt_agent.sandbox.exec import SMRT_NETWORK
+    net_info = networks.get(SMRT_NETWORK) or (next(iter(networks.values()), {}) if networks else {})
+    container_ip = net_info.get("IPAddress")
 
     return SandboxStartResponse(
         container_id=container.id,
         healthy=healthy,
-        port=host_port,
+        container_ip=container_ip,
     )
