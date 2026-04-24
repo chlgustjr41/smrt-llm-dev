@@ -146,3 +146,25 @@ async def test_approve_no_hitl_pending(app_client):
 async def test_skip_no_hitl_pending(app_client):
     resp = await app_client.post("/projects/1/qa-sessions/nonexistent/skip")
     assert resp.status_code == 409
+
+
+from smrt_agent.watchers import _DEBOUNCE_SECONDS
+
+
+def test_debounce_constant():
+    assert _DEBOUNCE_SECONDS == 30.0
+
+
+from smrt_agent.scheduler import start_scheduler, stop_scheduler
+
+
+def test_scheduler_starts_and_stops():
+    triggered = []
+
+    async def fake_trigger(project_id: int):
+        triggered.append(project_id)
+
+    sched = start_scheduler(fake_trigger, [1, 2])
+    assert sched.running
+    assert len(sched.get_jobs()) == 2
+    stop_scheduler()
