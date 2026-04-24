@@ -7,8 +7,8 @@ services:
       - ./backend/src:/app/src
       - ./backend/tests:/app/tests
       - smrt-db:/app/.smrt
-      # Mount workspace so the backend can see host project paths
-      - .:/workspace:ro
+      # Mount workspace rw so the agent can write .smrt/Project.md
+      - .:/workspace
       # Docker socket so the backend can build/run sandbox containers
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
