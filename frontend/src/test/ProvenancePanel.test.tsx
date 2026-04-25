@@ -45,9 +45,9 @@ describe('ProvenancePanel', () => {
   it('shows provenance entries with ticket, subagent, and attempts visible', async () => {
     render(<ProvenancePanel projectId={1} />)
     await waitFor(() => expect(screen.getByText('BUG-0042')).toBeInTheDocument())
-    expect(screen.getByText('coder_agent')).toBeInTheDocument()
+    expect(screen.getByText('coder')).toBeInTheDocument()
     expect(screen.getByText('BUG-0043')).toBeInTheDocument()
-    expect(screen.getByText('reviewer_agent')).toBeInTheDocument()
+    expect(screen.getByText('reviewer')).toBeInTheDocument()
   })
 
   it('shows empty state when no entries', async () => {
@@ -70,7 +70,7 @@ describe('ProvenancePanel', () => {
     )
     render(<ProvenancePanel projectId={1} />)
     await waitFor(() =>
-      expect(screen.getByText(/failed to load provenance/i)).toBeInTheDocument(),
+      expect(screen.getByText(/failed to fetch/i)).toBeInTheDocument(),
     )
   })
 

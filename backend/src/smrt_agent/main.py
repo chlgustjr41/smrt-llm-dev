@@ -49,9 +49,9 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(qa_sessions_router)
     app.include_router(tickets_router)
-    app.include_router(docs_router, prefix="/api")
-    app.include_router(stats_router, prefix="/api")
-    app.include_router(provenance_router, prefix="/api")
+    app.include_router(docs_router)
+    app.include_router(stats_router)
+    app.include_router(provenance_router)
 
     return app
 

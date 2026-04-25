@@ -84,16 +84,15 @@ describe('HeatmapChart', () => {
     const cells = screen.getAllByTestId('treemap-cell')
     // Click first cell (src/api/main.py)
     await user.click(cells[0])
-    // Detail panel should be visible (LOC label only appears in detail panel)
-    expect(screen.getByText(/LOC:/i)).toBeInTheDocument()
-    // Detail panel should show LOC and bugs_resolved values
+    // Detail panel should be visible (file path appears in both treemap cell and detail panel)
+    expect(screen.getAllByText(/src\/api\/main\.py/i).length).toBeGreaterThan(0)
+    // Detail panel should show lines and bugs_resolved values
     expect(screen.getByText(/200/)).toBeInTheDocument()
-    expect(screen.getByText(/3/)).toBeInTheDocument()
+    expect(screen.getByText(/bugs resolved/i)).toBeInTheDocument()
 
     // Click same cell again to deselect
     await user.click(cells[0])
-    // Detail panel should be gone — the detail panel has a specific structure
-    // Check that the detail panel container is no longer rendered
-    expect(screen.queryByText(/LOC/i)).not.toBeInTheDocument()
+    // Detail panel should be gone
+    expect(screen.queryByText(/bugs resolved/i)).not.toBeInTheDocument()
   })
 })

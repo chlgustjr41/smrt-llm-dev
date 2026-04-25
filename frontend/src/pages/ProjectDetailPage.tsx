@@ -13,28 +13,47 @@ import { HeatmapChart } from '../components/HeatmapChart'
 import { DocScoreChart } from '../components/DocScoreChart'
 import { ProvenancePanel } from '../components/ProvenancePanel'
 
-function StatusBadge({ status }: { status: string }) {
-  const cls =
-    status === 'done'
-      ? 'bg-green-100 text-green-700'
-      : status === 'running' || status === 'qa_running' || status === 'coder_running'
-      ? 'bg-blue-100 text-blue-700'
-      : status === 'error'
-      ? 'bg-red-100 text-red-700'
-      : status === 'skipped'
-      ? 'bg-gray-100 text-gray-500'
-      : status === 'hitl_waiting'
-      ? 'bg-yellow-100 text-yellow-700'
-      : 'bg-gray-100 text-gray-600'
+// ── Shared UI primitives ──────────────────────────────────────────────────
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${cls}`}>
-      {(status === 'running' || status === 'qa_running' || status === 'coder_running') && (
-        <span className="animate-pulse">●</span>
-      )}
+    <div className={`rounded-xl border border-gray-200 bg-white shadow-sm ${className}`}>
+      {children}
+    </div>
+  )
+}
+
+function CardHeader({ title, action }: { title: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">{title}</h2>
+      {action}
+    </div>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    done: 'bg-emerald-100 text-emerald-700',
+    running: 'bg-blue-100 text-blue-700',
+    qa_running: 'bg-violet-100 text-violet-700',
+    coder_running: 'bg-amber-100 text-amber-700',
+    error: 'bg-red-100 text-red-600',
+    skipped: 'bg-gray-100 text-gray-500',
+    hitl_waiting: 'bg-yellow-100 text-yellow-700',
+  }
+  const cls = map[status] ?? 'bg-gray-100 text-gray-500'
+  const isRunning = ['running', 'qa_running', 'coder_running'].includes(status)
+
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+      {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
       {status}
     </span>
   )
 }
+
+// ── Main page ─────────────────────────────────────────────────────────────
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -111,176 +130,211 @@ export function ProjectDetailPage() {
     }
   }
 
-  if (loading) return <p className="p-6">Loading project…</p>
-  if (error && !project) return <p className="p-6 text-red-600">{error}</p>
+  if (loading) return (
+    <div className="max-w-4xl mx-auto p-8 flex items-center gap-3 text-gray-400">
+      <span className="animate-spin text-lg">⟳</span>
+      <span>Loading project…</span>
+    </div>
+  )
+  if (error && !project) return (
+    <div className="max-w-4xl mx-auto p-8">
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
+    </div>
+  )
   if (!project) return null
 
   const activeRunStatus = runId ? pastRuns.find((r) => r.run_id === runId)?.status : null
 
   return (
-    <div className="max-w-3xl mx-auto p-6">
-      <Link to="/" className="text-blue-600 hover:underline text-sm mb-4 block">
+    <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+      {/* Breadcrumb */}
+      <Link to="/" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 transition-colors">
         ← All projects
       </Link>
 
-      <h1 className="text-2xl font-bold mb-1">{project.name}</h1>
-      <p className="text-gray-500 text-sm mb-6">{project.canonical_path}</p>
-
-      {/* ── Init Audit ── */}
-      <div className="flex items-center gap-3 mb-2">
-        {!runId ? (
-          <button
-            onClick={handleRunAudit}
-            disabled={starting}
-            className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-          >
-            {starting ? 'Starting…' : 'Run Init Audit'}
-          </button>
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 font-mono truncate max-w-[16rem]">{runId}</span>
-            {activeRunStatus && <StatusBadge status={activeRunStatus} />}
-          </div>
-        )}
+      {/* Project header */}
+      <div className="space-y-1">
+        <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
+        <p className="font-mono text-sm text-gray-400">{project.canonical_path}</p>
       </div>
 
-      {error && <p className="text-red-600 mt-3">{error}</p>}
-
-      {runId && (
-        <div className="mt-4">
-          <LiveAgentView projectId={projectId} runId={runId} onComplete={handleRunComplete} />
-        </div>
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
       )}
+
+      {/* ── Init Audit ── */}
+      <Card>
+        <CardHeader
+          title="Init Audit"
+          action={
+            !runId ? (
+              <button
+                onClick={handleRunAudit}
+                disabled={starting}
+                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+              >
+                {starting ? (
+                  <><span className="animate-spin">⟳</span> Starting…</>
+                ) : (
+                  <><span>🔍</span> Run Init Audit</>
+                )}
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-gray-400 truncate max-w-[14rem]">{runId}</span>
+                {activeRunStatus && <StatusBadge status={activeRunStatus} />}
+              </div>
+            )
+          }
+        />
+        {runId ? (
+          <div className="p-5">
+            <LiveAgentView projectId={projectId} runId={runId} onComplete={handleRunComplete} />
+          </div>
+        ) : (
+          <div className="px-5 py-4 text-sm text-gray-400">
+            Run the init audit to analyze your codebase, generate documentation, and discover issues.
+          </div>
+        )}
+      </Card>
 
       {/* ── Run history ── */}
       {pastRuns.length > 0 && (
-        <div className="mt-8">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            Run history
-          </h2>
-          <table className="w-full text-sm border rounded overflow-hidden">
-            <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
-              <tr>
-                <th className="text-left px-3 py-2">Run ID</th>
-                <th className="text-left px-3 py-2">Status</th>
-                <th className="text-right px-3 py-2">In tokens</th>
-                <th className="text-right px-3 py-2">Out tokens</th>
-                <th className="text-left px-3 py-2">Started</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pastRuns.map((run) => (
-                <React.Fragment key={run.run_id}>
-                  <tr className="border-t hover:bg-gray-50">
-                    <td className="px-3 py-2 font-mono text-xs text-gray-600 truncate max-w-[12rem]">
-                      {run.run_id}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge status={run.status} />
-                    </td>
-                    <td className="px-3 py-2 text-right text-gray-600">
-                      {run.total_input_tokens.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right text-gray-600">
-                      {run.total_output_tokens.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-gray-400 text-xs">
-                      {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
-                    </td>
-                  </tr>
-                  <tr className="border-t bg-gray-50">
-                    <td colSpan={5} className="px-3">
-                      <PastRunViewer projectId={projectId} runId={run.run_id} />
-                    </td>
-                  </tr>
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card>
+          <CardHeader title="Run History" />
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">
+                <tr>
+                  <th className="text-left px-4 py-2.5">Run ID</th>
+                  <th className="text-left px-4 py-2.5">Status</th>
+                  <th className="text-right px-4 py-2.5">In tokens</th>
+                  <th className="text-right px-4 py-2.5">Out tokens</th>
+                  <th className="text-left px-4 py-2.5">Started</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pastRuns.map((run) => (
+                  <React.Fragment key={run.run_id}>
+                    <tr className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-500 truncate max-w-[12rem]">
+                        {run.run_id}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <StatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
+                        {run.total_input_tokens.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
+                        {run.total_output_tokens.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-400 text-xs">
+                        {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                      </td>
+                    </tr>
+                    <tr className="bg-gray-50">
+                      <td colSpan={5} className="px-4 py-2">
+                        <PastRunViewer projectId={projectId} runId={run.run_id} />
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {/* ── QA / Test Session ── */}
-      <div className="mt-8 border-t pt-6">
-        <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-            QA / Test Session
-          </h2>
-          {qaSessionId && !qaStatus && <StatusBadge status="running" />}
-          {qaStatus && <StatusBadge status={qaStatus} />}
-        </div>
-
-        {!qaSessionId || qaStatus ? (
-          <button
-            onClick={handleRunQA}
-            disabled={startingQA}
-            className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-50"
-          >
-            {startingQA ? 'Starting…' : qaStatus ? 'Run New QA Session' : 'Run QA Session'}
-          </button>
-        ) : null}
-
-        {qaSessionId && (
-          <div className={qaStatus ? 'mt-4 opacity-60 pointer-events-none' : 'mt-4'}>
+      <Card>
+        <CardHeader
+          title="QA / Test Session"
+          action={
+            <div className="flex items-center gap-3">
+              {qaSessionId && !qaStatus && <StatusBadge status="qa_running" />}
+              {qaStatus && <StatusBadge status={qaStatus} />}
+              {(!qaSessionId || qaStatus) && (
+                <button
+                  onClick={handleRunQA}
+                  disabled={startingQA}
+                  className="inline-flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+                >
+                  {startingQA ? (
+                    <><span className="animate-spin">⟳</span> Starting…</>
+                  ) : (
+                    <><span>🧪</span> {qaStatus ? 'Run New QA Session' : 'Run QA Session'}</>
+                  )}
+                </button>
+              )}
+            </div>
+          }
+        />
+        {qaSessionId ? (
+          <div className={`p-5 ${qaStatus ? 'opacity-60 pointer-events-none' : ''}`}>
             <QASessionView
               projectId={projectId}
               sessionId={qaSessionId}
               onComplete={handleQAComplete}
             />
           </div>
+        ) : (
+          <div className="px-5 py-4 text-sm text-gray-400">
+            Run a QA session to have agents automatically test, file bug tickets, and generate fixes.
+          </div>
         )}
-      </div>
+      </Card>
 
       {/* ── Bug Tickets ── */}
-      <div className="mt-8 border-t pt-6">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-          Bug Tickets
-        </h2>
-        <TicketsPanel projectId={projectId} refreshKey={ticketsRefreshKey} />
+      <Card>
+        <CardHeader title="Bug Tickets" />
+        <div className="p-5">
+          <TicketsPanel projectId={projectId} refreshKey={ticketsRefreshKey} />
+        </div>
+      </Card>
+
+      {/* ── Dashboards ── */}
+      <div className="space-y-4">
+        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide px-1">Dashboards</h2>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader title="Audit Cost Breakdown" />
+            <div className="p-5">
+              <CostChart projectId={projectId} />
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Documentation Completeness" />
+            <div className="p-5">
+              <DocScoreChart projectId={projectId} />
+            </div>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader title="Bug-Hunt Heatmap" />
+          <div className="p-5">
+            <HeatmapChart projectId={projectId} />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Change Provenance" />
+          <div className="p-5">
+            <ProvenancePanel projectId={projectId} />
+          </div>
+        </Card>
       </div>
 
       {/* ── Documentation ── */}
-      <div className="mt-8 border-t pt-6">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-          Documentation
-        </h2>
-        <DocPanel projectId={projectId} />
-      </div>
-
-      {/* ── Dashboards ── */}
-      <div className="mt-8 border-t pt-6">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-6">
-          Dashboards
-        </h2>
-
-        <div className="mb-6">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-            Audit Cost Breakdown
-          </h3>
-          <CostChart projectId={projectId} />
+      <Card>
+        <CardHeader title="Documentation" />
+        <div className="p-5">
+          <DocPanel projectId={projectId} />
         </div>
-
-        <div className="mb-6">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-            Bug-Hunt Heatmap
-          </h3>
-          <HeatmapChart projectId={projectId} />
-        </div>
-
-        <div className="mb-6">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-            Documentation Completeness
-          </h3>
-          <DocScoreChart projectId={projectId} />
-        </div>
-
-        <div className="mb-6">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-            Change Provenance
-          </h3>
-          <ProvenancePanel projectId={projectId} />
-        </div>
-      </div>
+      </Card>
     </div>
   )
 }

@@ -52,7 +52,7 @@ describe('LiveAgentView', () => {
       })
     })
     // text_delta hidden by default; click Show thoughts to reveal
-    await user.click(screen.getByText('Show thoughts'))
+    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
     expect(screen.getByText('Analyzing source tree…')).toBeInTheDocument()
   })
 
@@ -133,10 +133,10 @@ describe('LiveAgentView', () => {
     // Initially hidden
     expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
     // Click Show thoughts — now visible
-    await user.click(screen.getByText('Show thoughts'))
+    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
     expect(screen.getByText('Toggle thought text')).toBeInTheDocument()
     // Click Hide thoughts — hidden again
-    await user.click(screen.getByText('Hide thoughts'))
+    await user.click(screen.getByRole('button', { name: /hide thoughts/i }))
     expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
   })
 })

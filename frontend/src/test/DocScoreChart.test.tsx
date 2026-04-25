@@ -20,6 +20,7 @@ vi.mock('recharts', () => ({
   Tooltip: () => null,
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   CartesianGrid: () => null,
+  ReferenceLine: () => null,
 }))
 
 const mockData: DocScoreEntry[] = [

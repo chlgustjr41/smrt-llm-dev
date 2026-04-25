@@ -69,48 +69,98 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
     }
   }
 
+  // Which agents are actively visible in the stream
+  const lastStatus = events.findLast?.((e) => e.type === 'session_status')?.status ?? null
+
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          {!done ? (
+            <>
+              {lastStatus?.startsWith('qa') && (
+                <div className="flex items-center gap-1.5 text-sm text-violet-600">
+                  <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse inline-block" />
+                  <span className="font-medium">🧪 QA running…</span>
+                </div>
+              )}
+              {lastStatus?.startsWith('coder') && (
+                <div className="flex items-center gap-1.5 text-sm text-amber-600">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse inline-block" />
+                  <span className="font-medium">🛠️ Coder running…</span>
+                </div>
+              )}
+              {lastStatus === 'hitl_waiting' && (
+                <div className="flex items-center gap-1.5 text-sm text-yellow-600">
+                  <span className="animate-pulse">⏳</span>
+                  <span className="font-medium">Awaiting your approval</span>
+                </div>
+              )}
+              {!lastStatus && (
+                <div className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <span className="w-2 h-2 rounded-full bg-gray-300 animate-pulse inline-block" />
+                  <span>Starting…</span>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5 text-sm text-emerald-600">
+              <span>✓</span>
+              <span className="font-medium">Session complete</span>
+              {totalCost > 0 && (
+                <span className="text-gray-400 font-normal">· ${totalCost.toFixed(4)}</span>
+              )}
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
-          className="text-xs text-gray-500 underline"
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+            showThoughts
+              ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+              : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+          }`}
           onClick={() => setShowThoughts((p) => !p)}
         >
-          {showThoughts ? 'Hide thoughts' : 'Show thoughts'}
+          {showThoughts ? '🧠 Hide thoughts' : '🧠 Show thoughts'}
         </button>
       </div>
+
       <AgentTimeline events={events} showThoughts={showThoughts} />
 
-      {totalCost > 0 && (
-        <p className="text-xs text-gray-400">Running cost: ${totalCost.toFixed(4)}</p>
-      )}
-
+      {/* HITL approval card */}
       {hitlTicket && !done && (
-        <div className="p-3 border border-yellow-300 bg-yellow-50 rounded">
-          <p className="text-sm font-medium mb-2">
-            Bug ticket <code>{hitlTicket}</code> filed. Approve fix attempt?
-          </p>
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <span className="text-yellow-600 text-lg">⏳</span>
+            <div>
+              <p className="text-sm font-semibold text-yellow-800">Human-in-the-Loop approval required</p>
+              <p className="text-xs text-yellow-700 mt-0.5">
+                Bug ticket <code className="font-mono bg-yellow-100 px-1 rounded">{hitlTicket}</code> was filed.
+                Approve the coder's fix attempt or skip this ticket.
+              </p>
+            </div>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={handleApprove}
               disabled={actioning}
-              className="bg-green-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
             >
-              Approve Fix
+              ✓ Approve Fix
             </button>
             <button
               onClick={handleSkip}
               disabled={actioning}
-              className="border px-3 py-1.5 rounded text-sm hover:bg-gray-100 disabled:opacity-50"
+              className="flex-1 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors"
             >
               Skip
             </button>
           </div>
         </div>
       )}
-
-      {done && <p className="text-xs text-gray-400">Session complete.</p>}
     </div>
   )
 }

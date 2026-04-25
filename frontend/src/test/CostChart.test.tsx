@@ -9,11 +9,12 @@ vi.mock('recharts', () => ({
   BarChart: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="bar-chart">{children}</div>
   ),
-  Bar: ({ name }: { name: string }) => <div data-testid={`bar-${name}`} />,
+  Bar: ({ dataKey }: { dataKey: string }) => <div data-testid={`bar-${dataKey}`} />,
   XAxis: () => null,
   YAxis: () => null,
   Tooltip: () => null,
   Legend: () => null,
+  CartesianGrid: () => null,
 }))
 
 const mockRun = {

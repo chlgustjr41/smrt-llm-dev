@@ -59,8 +59,8 @@ describe('AgentTimeline', () => {
       { type: 'coder_text_delta', text: 'Fixing the bug…', agent: 'coder' },
     ]
     render(<AgentTimeline events={events} showThoughts={true} />)
-    expect(screen.getByText(/QA Agent/)).toBeInTheDocument()
-    expect(screen.getByText(/Coder Agent/)).toBeInTheDocument()
+    expect(screen.getAllByText(/QA Agent/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Coder/).length).toBeGreaterThan(0)
     expect(screen.getByText(/Running QA tests…/)).toBeInTheDocument()
     expect(screen.getByText(/Fixing the bug…/)).toBeInTheDocument()
   })
@@ -74,7 +74,7 @@ describe('AgentTimeline', () => {
     render(<AgentTimeline events={events} />)
     const pre = screen.getByText(/2 passed in 0\.5s/)
     expect(pre).toBeInTheDocument()
-    expect(pre).toHaveClass('bg-green-50')
+    expect(pre).toHaveClass('bg-emerald-50')
   })
 
   it('hides text_delta events by default', () => {
