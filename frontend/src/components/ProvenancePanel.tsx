@@ -44,8 +44,8 @@ function ProvenanceCard({ entry }: { entry: ProvenanceEntry }) {
             <p className="font-semibold text-gray-600 mb-1">Related lessons:</p>
             {entry.related_lessons_applied.length > 0 ? (
               <ul className="list-disc list-inside space-y-0.5">
-                {entry.related_lessons_applied.map((lesson, i) => (
-                  <li key={i}>{lesson}</li>
+                {entry.related_lessons_applied.map((lesson) => (
+                  <li key={lesson}>{lesson}</li>
                 ))}
               </ul>
             ) : (
@@ -73,13 +73,12 @@ export function ProvenancePanel({ projectId }: { projectId: number }) {
           setItems(data)
         }
       })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setError('Failed to load provenance.')
-        }
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.name === 'AbortError') return
+        setError('Failed to load provenance.')
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
+        setLoading(false)
       })
     return () => controller.abort()
   }, [projectId])
@@ -91,8 +90,8 @@ export function ProvenancePanel({ projectId }: { projectId: number }) {
 
   return (
     <div className="space-y-2">
-      {items.map((entry, i) => (
-        <ProvenanceCard key={`${entry.ticket}-${i}`} entry={entry} />
+      {items.map((entry) => (
+        <ProvenanceCard key={`${entry.ticket}-${entry.subagent}-${entry.ts ?? ''}`} entry={entry} />
       ))}
     </div>
   )
