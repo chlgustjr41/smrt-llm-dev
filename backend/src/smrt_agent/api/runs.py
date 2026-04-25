@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.agents.reviewer.loop import run_reviewer
+from smrt_agent.docs.service import generate_docs
 from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import RunCreatedResponse
 from smrt_agent.db.models import AgentRun, Project
@@ -98,6 +99,21 @@ async def _run_task(
             queue=queue,
         )
         final_status = "done"
+        # Generate docs after audit — best-effort, does not affect run status
+        try:
+            doc_counts = await generate_docs(Path(canonical_path))
+            await queue.put({
+                "type": "docs_written",
+                "backends": doc_counts["backends"],
+                "endpoints": doc_counts["endpoints"],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as doc_exc:
+            await queue.put({
+                "type": "docs_error",
+                "error": str(doc_exc),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
     except Exception as exc:
         await queue.put({"type": "error", "message": str(exc)})
         final_status = "error"
