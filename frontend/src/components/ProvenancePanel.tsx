@@ -75,7 +75,7 @@ export function ProvenancePanel({ projectId }: { projectId: number }) {
       })
       .catch((e: unknown) => {
         if (e instanceof Error && e.name === 'AbortError') return
-        setError('Failed to load provenance.')
+        setError(e instanceof Error ? e.message : 'Failed to load provenance.')
       })
       .finally(() => {
         setLoading(false)
