@@ -263,7 +263,12 @@ export function AgentTimeline({
   showThoughts?: boolean
 }) {
   const filteredEvents = useMemo(
-    () => (showThoughts ? events : events.filter((e) => e.type !== 'text_delta')),
+    () =>
+      showThoughts
+        ? events
+        : events.filter((e) =>
+            !['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type)
+          ),
     [events, showThoughts],
   )
   const phases = useMemo(() => groupIntoPhases(filteredEvents, defaultLabel), [filteredEvents, defaultLabel])

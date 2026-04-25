@@ -58,7 +58,7 @@ describe('AgentTimeline', () => {
       { type: 'session_status', status: 'coder_running', fix_attempt: 0, ts },
       { type: 'coder_text_delta', text: 'Fixing the bug…', agent: 'coder' },
     ]
-    render(<AgentTimeline events={events} />)
+    render(<AgentTimeline events={events} showThoughts={true} />)
     expect(screen.getByText(/QA Agent/)).toBeInTheDocument()
     expect(screen.getByText(/Coder Agent/)).toBeInTheDocument()
     expect(screen.getByText(/Running QA tests…/)).toBeInTheDocument()
@@ -83,6 +83,16 @@ describe('AgentTimeline', () => {
     ]
     render(<AgentTimeline events={events} defaultLabel="Reviewer" />)
     expect(screen.queryByText(/Hidden thought content/)).not.toBeInTheDocument()
+  })
+
+  it('hides qa_text_delta and coder_text_delta events by default', () => {
+    const events = [
+      { type: 'qa_text_delta', content: 'qa-thought-hidden', ts: '2026-01-01T00:00:00Z' },
+      { type: 'coder_text_delta', content: 'coder-thought-hidden', ts: '2026-01-01T00:00:01Z' },
+    ]
+    render(<AgentTimeline events={events} />)
+    expect(screen.queryByText('qa-thought-hidden')).not.toBeInTheDocument()
+    expect(screen.queryByText('coder-thought-hidden')).not.toBeInTheDocument()
   })
 
   it('shows text_delta events when showThoughts is true', () => {

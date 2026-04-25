@@ -57,6 +57,7 @@ export function LiveAgentView({
     <div className="space-y-3">
       <div className="flex justify-end">
         <button
+          type="button"
           className="text-xs text-gray-500 underline"
           onClick={() => setShowThoughts((p) => !p)}
         >
