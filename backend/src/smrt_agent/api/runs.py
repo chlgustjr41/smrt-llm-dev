@@ -3,6 +3,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,7 @@ from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import RunCreatedResponse
 from smrt_agent.db.models import AgentRun, Project
 from smrt_agent.db.session import get_engine, get_session_factory
+from smrt_agent.event_log import EventLogger
 from smrt_agent.settings import Settings
 
 router = APIRouter(prefix="/projects", tags=["runs"])
@@ -40,6 +42,11 @@ async def create_run(
     queue: asyncio.Queue = asyncio.Queue()
     _queues[run_id] = queue
 
+    logged_queue = EventLogger(
+        queue,
+        Path(project.canonical_path) / ".smrt" / "runs" / f"{run_id}.jsonl",
+    )
+
     settings = Settings()
 
     asyncio.create_task(
@@ -47,7 +54,7 @@ async def create_run(
             project_id=project_id,
             canonical_path=project.canonical_path,
             run_id=run_id,
-            queue=queue,
+            queue=logged_queue,
             api_key=settings.anthropic_api_key,
             model=settings.model_reviewer,
             budget_usd=settings.budget_per_run_usd,
@@ -67,8 +74,6 @@ async def _run_task(
     model: str,
     budget_usd: float,
 ) -> None:
-    from pathlib import Path
-
     final_status = "error"
     try:
         # Update run status to running
@@ -110,6 +115,26 @@ async def _run_task(
                     await db.commit()
         except Exception:
             pass
+
+
+@router.get("/{project_id}/runs/{run_id}/events")
+async def get_run_events(
+    project_id: int,
+    run_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    log_path = Path(project.canonical_path) / ".smrt" / "runs" / f"{run_id}.jsonl"
+    if not log_path.exists():
+        return {"events": []}
+    events = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            events.append(json.loads(line))
+    return {"events": events}
 
 
 @router.get("/{project_id}/runs/{run_id}/stream")
