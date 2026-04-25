@@ -84,13 +84,13 @@ async def get_heatmap(
 
     # Scan source files for LOC
     files = []
-    for path in project_path.rglob("*"):
+    for path in project_path.rglob("*"):  # noqa: ASYNC240
         if any(part in _IGNORE_DIRS for part in path.parts):
             continue
         if not path.is_file() or path.suffix not in _SOURCE_EXTS:
             continue
         try:
-            loc = path.read_text(encoding="utf-8", errors="replace").count("\n") + 1
+            loc = max(len(path.read_text(encoding="utf-8", errors="replace").splitlines()), 1)
         except Exception:
             continue
         rel = str(path.relative_to(project_path)).replace("\\", "/")
