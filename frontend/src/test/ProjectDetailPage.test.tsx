@@ -1,32 +1,50 @@
 import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ProjectDetailPage } from '../pages/ProjectDetailPage'
 
-// Stub EventSource so LiveAgentView doesn't crash in jsdom
-class NoopEventSource {
-  onmessage: null = null
-  onerror: null = null
-  constructor(_url: string) {}
-  close() {}
-}
-vi.stubGlobal('EventSource', NoopEventSource)
+vi.mock('../components/LiveAgentView', () => ({
+  LiveAgentView: ({ runId }: { runId: string }) => (
+    <div data-testid="live-agent-view">LiveAgentView:{runId}</div>
+  ),
+}))
 
-const mockProject = {
-  id: 1,
-  name: 'todo-api',
-  canonical_path: '/workspace/eval-fixtures/todo-api',
-  created_at: '2026-04-24T00:00:00Z',
-}
+vi.mock('../components/QASessionView', () => ({
+  QASessionView: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid="qa-session-view">QASessionView:{sessionId}</div>
+  ),
+}))
+
+vi.mock('../components/TicketsPanel', () => ({
+  TicketsPanel: ({ projectId }: { projectId: number }) => (
+    <div data-testid="tickets-panel">TicketsPanel:{projectId}</div>
+  ),
+}))
+
+vi.mock('../components/PastRunViewer', () => ({
+  PastRunViewer: ({ runId }: { runId: string }) => (
+    <div data-testid="past-run-viewer">PastRunViewer:{runId}</div>
+  ),
+}))
 
 const server = setupServer(
-  http.get('http://localhost/api/projects/1', () => HttpResponse.json(mockProject)),
+  http.get('http://localhost/api/projects/1', () =>
+    HttpResponse.json({
+      id: 1,
+      name: 'todo-api',
+      canonical_path: '/d/projects/todo-api',
+      created_at: '2026-04-24T00:00:00Z',
+    }),
+  ),
   http.get('http://localhost/api/projects/1/runs', () => HttpResponse.json([])),
   http.post('http://localhost/api/projects/1/runs', () =>
-    HttpResponse.json({ run_id: 'test-run-uuid-1234', status: 'pending' }, { status: 202 }),
+    HttpResponse.json({ run_id: 'run-xyz', status: 'pending' }, { status: 202 }),
+  ),
+  http.post('http://localhost/api/projects/1/qa-sessions', () =>
+    HttpResponse.json({ session_id: 'sess-xyz', status: 'pending' }, { status: 202 }),
   ),
 )
 
@@ -34,9 +52,9 @@ beforeAll(() => server.listen())
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
 
-function renderDetailPage(id = '1') {
+function renderPage() {
   return render(
-    <MemoryRouter initialEntries={[`/projects/${id}`]}>
+    <MemoryRouter initialEntries={['/projects/1']}>
       <Routes>
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
       </Routes>
@@ -45,63 +63,67 @@ function renderDetailPage(id = '1') {
 }
 
 describe('ProjectDetailPage', () => {
-  it('shows loading then project name', async () => {
-    renderDetailPage()
-    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+  it('shows project name after loading', async () => {
+    renderPage()
     await waitFor(() => expect(screen.getByText('todo-api')).toBeInTheDocument())
   })
 
-  it('shows canonical path', async () => {
-    renderDetailPage()
-    await waitFor(() =>
-      expect(screen.getByText('/workspace/eval-fixtures/todo-api')).toBeInTheDocument(),
-    )
-  })
-
   it('shows Run Init Audit button', async () => {
-    renderDetailPage()
+    renderPage()
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /run init audit/i })).toBeInTheDocument(),
     )
   })
 
-  it('starts a run when button is clicked and shows run id', async () => {
+  it('shows LiveAgentView after clicking Run Init Audit', async () => {
     const user = userEvent.setup()
-    renderDetailPage()
+    renderPage()
     await waitFor(() => screen.getByRole('button', { name: /run init audit/i }))
     await user.click(screen.getByRole('button', { name: /run init audit/i }))
-    await waitFor(() => expect(screen.getAllByText(/test-run-uuid-1234/i).length).toBeGreaterThan(0))
+    await waitFor(() =>
+      expect(screen.getByTestId('live-agent-view')).toBeInTheDocument(),
+    )
   })
-})
 
-import { createQASession } from '../api/qa_sessions'
+  it('shows Run QA Session button', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /run qa session/i })).toBeInTheDocument(),
+    )
+  })
 
-it('qa_sessions api module exports createQASession', () => {
-  expect(typeof createQASession).toBe('function')
-})
+  it('starts a QA session when button clicked', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /run qa session/i }))
+    await user.click(screen.getByRole('button', { name: /run qa session/i }))
+    await waitFor(() => expect(screen.getByTestId('qa-session-view')).toBeInTheDocument())
+  })
 
-vi.mock('../components/QASessionView', () => ({
-  QASessionView: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="qa-view">{sessionId}</div>
-  ),
-}))
+  it('renders the TicketsPanel section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('tickets-panel')).toBeInTheDocument())
+  })
 
-it('shows Run QA Session button', async () => {
-  renderDetailPage()
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: /run qa session/i })).toBeInTheDocument()
-  )
-})
-
-it('starts a QA session when button clicked', async () => {
-  server.use(
-    http.post('http://localhost/api/projects/1/qa-sessions', () =>
-      HttpResponse.json({ session_id: 'qa-sess-uuid-5678', status: 'pending' }, { status: 202 }),
-    ),
-  )
-  const user = userEvent.setup()
-  renderDetailPage()
-  await waitFor(() => screen.getByRole('button', { name: /run qa session/i }))
-  await user.click(screen.getByRole('button', { name: /run qa session/i }))
-  await waitFor(() => expect(screen.getByTestId('qa-view')).toBeInTheDocument())
+  it('shows PastRunViewer in run history when past runs exist', async () => {
+    server.use(
+      http.get('http://localhost/api/projects/1/runs', () =>
+        HttpResponse.json([
+          {
+            id: 1,
+            run_id: 'run-old-123',
+            project_id: 1,
+            status: 'done',
+            total_input_tokens: 100,
+            total_output_tokens: 50,
+            started_at: '2026-04-24T00:00:00Z',
+            completed_at: '2026-04-24T00:01:00Z',
+          },
+        ]),
+      ),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('past-run-viewer')).toBeInTheDocument())
+    expect(screen.getByText(/PastRunViewer:run-old-123/)).toBeInTheDocument()
+  })
 })

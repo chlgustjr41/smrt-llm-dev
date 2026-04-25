@@ -5,6 +5,8 @@ import { createRun } from '../api/runs'
 import { LiveAgentView } from '../components/LiveAgentView'
 import { createQASession } from '../api/qa_sessions'
 import { QASessionView } from '../components/QASessionView'
+import { TicketsPanel } from '../components/TicketsPanel'
+import { PastRunViewer } from '../components/PastRunViewer'
 
 function StatusBadge({ status }: { status: string }) {
   const cls =
@@ -42,6 +44,7 @@ export function ProjectDetailPage() {
   const [qaSessionId, setQaSessionId] = useState<string | null>(null)
   const [qaStatus, setQaStatus] = useState<string | null>(null)
   const [startingQA, setStartingQA] = useState(false)
+  const [ticketsRefreshKey, setTicketsRefreshKey] = useState(0)
 
   useEffect(() => {
     Promise.all([getProject(projectId), listRuns(projectId)])
@@ -82,6 +85,11 @@ export function ProjectDetailPage() {
   function handleRunComplete(status: string) {
     if (!runId) return
     setPastRuns((prev) => prev.map((r) => (r.run_id === runId ? { ...r, status } : r)))
+  }
+
+  function handleQAComplete(status: string) {
+    setQaStatus(status)
+    setTicketsRefreshKey((k) => k + 1)
   }
 
   async function handleRunQA() {
@@ -157,23 +165,30 @@ export function ProjectDetailPage() {
             </thead>
             <tbody>
               {pastRuns.map((run) => (
-                <tr key={run.run_id} className="border-t hover:bg-gray-50">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-600 truncate max-w-[12rem]">
-                    {run.run_id}
-                  </td>
-                  <td className="px-3 py-2">
-                    <StatusBadge status={run.status} />
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">
-                    {run.total_input_tokens.toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">
-                    {run.total_output_tokens.toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-gray-400 text-xs">
-                    {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
-                  </td>
-                </tr>
+                <>
+                  <tr key={run.run_id} className="border-t hover:bg-gray-50">
+                    <td className="px-3 py-2 font-mono text-xs text-gray-600 truncate max-w-[12rem]">
+                      {run.run_id}
+                    </td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={run.status} />
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-600">
+                      {run.total_input_tokens.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-600">
+                      {run.total_output_tokens.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">
+                      {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                    </td>
+                  </tr>
+                  <tr key={`${run.run_id}-events`} className="border-t bg-gray-50">
+                    <td colSpan={5} className="px-3">
+                      <PastRunViewer projectId={projectId} runId={run.run_id} />
+                    </td>
+                  </tr>
+                </>
               ))}
             </tbody>
           </table>
@@ -205,10 +220,18 @@ export function ProjectDetailPage() {
             <QASessionView
               projectId={projectId}
               sessionId={qaSessionId}
-              onComplete={setQaStatus}
+              onComplete={handleQAComplete}
             />
           </div>
         )}
+      </div>
+
+      {/* ── Bug Tickets ── */}
+      <div className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          Bug Tickets
+        </h2>
+        <TicketsPanel projectId={projectId} refreshKey={ticketsRefreshKey} />
       </div>
     </div>
   )
