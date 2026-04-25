@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.agents.reviewer.loop import run_reviewer
 from smrt_agent.docs.service import generate_docs
+from smrt_agent.knowledge import compute_doc_score, record_doc_score
 from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import RunCreatedResponse
 from smrt_agent.db.models import AgentRun, Project
@@ -108,6 +109,9 @@ async def _run_task(
                 "endpoints": doc_counts["endpoints"],
                 "ts": datetime.now(timezone.utc).isoformat(),
             })
+            score_entry = compute_doc_score(Path(canonical_path))
+            score_entry["ts"] = datetime.now(timezone.utc).isoformat()
+            record_doc_score(Path(canonical_path), score_entry)
         except Exception as doc_exc:
             await queue.put({
                 "type": "docs_error",

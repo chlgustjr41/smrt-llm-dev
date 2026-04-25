@@ -12,6 +12,8 @@ from smrt_agent.api.sandbox import router as sandbox_router
 from smrt_agent.api.qa_sessions import router as qa_sessions_router
 from smrt_agent.api.tickets import router as tickets_router
 from smrt_agent.api.docs import router as docs_router
+from smrt_agent.api.stats import router as stats_router
+from smrt_agent.api.provenance import router as provenance_router
 
 
 @asynccontextmanager
@@ -47,7 +49,9 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(qa_sessions_router)
     app.include_router(tickets_router)
-    app.include_router(docs_router, prefix="/api")
+    app.include_router(docs_router)
+    app.include_router(stats_router)
+    app.include_router(provenance_router)
 
     return app
 

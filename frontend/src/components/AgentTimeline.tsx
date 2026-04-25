@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import Markdown from 'react-markdown'
 
 export interface AgentEvent {
   type: string
@@ -34,29 +35,64 @@ interface AgentPhase {
   errorEvent: AgentEvent | null
 }
 
+// ── Agent brand colours ────────────────────────────────────────────────────
+
+const AGENT_META: Record<
+  string,
+  { icon: string; label: string; chip: string; header: string; border: string; tool: string }
+> = {
+  reviewer: {
+    icon: '🔍',
+    label: 'Reviewer',
+    chip: 'bg-blue-100 text-blue-700 border-blue-200',
+    header: 'bg-blue-50 border-blue-200',
+    border: 'border-blue-200',
+    tool: 'text-blue-700',
+  },
+  qa: {
+    icon: '🧪',
+    label: 'QA Agent',
+    chip: 'bg-violet-100 text-violet-700 border-violet-200',
+    header: 'bg-violet-50 border-violet-200',
+    border: 'border-violet-200',
+    tool: 'text-violet-700',
+  },
+  coder: {
+    icon: '🛠️',
+    label: 'Coder',
+    chip: 'bg-amber-100 text-amber-700 border-amber-200',
+    header: 'bg-amber-50 border-amber-200',
+    border: 'border-amber-200',
+    tool: 'text-amber-700',
+  },
+  system: {
+    icon: '⚙️',
+    label: 'System',
+    chip: 'bg-gray-100 text-gray-600 border-gray-200',
+    header: 'bg-gray-50 border-gray-200',
+    border: 'border-gray-200',
+    tool: 'text-gray-600',
+  },
+}
+
+// ── Phase helpers ──────────────────────────────────────────────────────────
+
 function makePhaseLabel(status: string, fixAttempt?: number): string {
   const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt}` : ''
   switch (status) {
-    case 'qa_running':
-      return `QA Agent${attempt}`
-    case 'coder_running':
-      return `Coder Agent${attempt}`
-    case 'hitl_waiting':
-      return 'Awaiting Approval'
-    case 'done':
-      return 'Complete'
-    case 'error':
-      return 'Error'
-    case 'skipped':
-      return 'Skipped'
-    default:
-      return status
+    case 'qa_running':      return `QA Agent${attempt}`
+    case 'coder_running':   return `Coder${attempt}`
+    case 'hitl_waiting':    return 'Awaiting Approval'
+    case 'done':            return 'Complete'
+    case 'error':           return 'Error'
+    case 'skipped':         return 'Skipped'
+    default:                return status
   }
 }
 
 function agentFromStatus(status: string): string {
-  if (status.startsWith('coder')) return 'coder'
-  if (status.startsWith('qa')) return 'qa'
+  if (status.startsWith('coder'))  return 'coder'
+  if (status.startsWith('qa'))     return 'qa'
   return 'system'
 }
 
@@ -101,9 +137,7 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
       toolUseQueue.push(event)
     } else if (event.type === 'tool_result') {
       const use = toolUseQueue.shift()
-      if (use) {
-        current.toolPairs.push({ use, result: event })
-      }
+      if (use) current.toolPairs.push({ use, result: event })
     } else if (event.type === 'recheck_output') {
       current.recheckEvent = event
     } else if (event.type === 'error') {
@@ -124,69 +158,53 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
   return phases
 }
 
-const AGENT_STYLES = {
-  reviewer: {
-    header: 'bg-blue-50 border-blue-200',
-    text: 'text-blue-800',
-    border: 'border-blue-200',
-    tool: 'text-blue-700',
-  },
-  qa: {
-    header: 'bg-purple-50 border-purple-200',
-    text: 'text-purple-800',
-    border: 'border-purple-200',
-    tool: 'text-purple-700',
-  },
-  coder: {
-    header: 'bg-orange-50 border-orange-200',
-    text: 'text-orange-800',
-    border: 'border-orange-200',
-    tool: 'text-orange-700',
-  },
-  system: {
-    header: 'bg-gray-50 border-gray-200',
-    text: 'text-gray-700',
-    border: 'border-gray-200',
-    tool: 'text-gray-600',
-  },
-}
+// ── Sub-components ─────────────────────────────────────────────────────────
 
-function ToolCallRow({ pair }: { pair: ToolCallPair }) {
+function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: string }) {
   const [expanded, setExpanded] = useState(false)
-  const style =
-    AGENT_STYLES[pair.use.agent as keyof typeof AGENT_STYLES] ?? AGENT_STYLES.system
+  const meta = AGENT_META[agentType] ?? AGENT_META.system
+  const inputStr = (() => {
+    try { return JSON.stringify(pair.use.input, null, 2) } catch { return '[input]' }
+  })()
+  const inputPreview = (() => {
+    try { return JSON.stringify(pair.use.input).slice(0, 80) } catch { return '[input]' }
+  })()
 
   return (
-    <div className={`border rounded text-xs font-mono ${style.border}`}>
+    <div className={`rounded-md border text-xs font-mono ${meta.border} overflow-hidden`}>
       <button
-        className="w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-gray-50"
+        type="button"
+        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-50 transition-colors"
         onClick={() => setExpanded((p) => !p)}
       >
-        <span className="text-gray-400 w-3 shrink-0">{expanded ? '▼' : '▶'}</span>
-        <span className={`font-semibold ${style.tool}`}>{pair.use.tool}</span>
+        <span className="text-gray-400 w-3 shrink-0 text-center">{expanded ? '▾' : '▸'}</span>
+        <span className={`font-semibold ${meta.tool}`}>{pair.use.tool}</span>
         {!expanded && (
-          <span className="text-gray-400 truncate">
-            {(() => { try { return JSON.stringify(pair.use.input).slice(0, 80) } catch { return '[input]' } })()}
+          <span className="text-gray-400 truncate opacity-70">{inputPreview}</span>
+        )}
+        {pair.result && (
+          <span className="ml-auto shrink-0 text-gray-400">
+            {pair.result.result && pair.result.result.length > 0 ? '✓' : '—'}
           </span>
         )}
         {pair.use.ts && (
-          <span className="ml-auto text-gray-400 shrink-0">
+          <span className="text-gray-400 shrink-0 text-[10px]">
             {new Date(pair.use.ts).toLocaleTimeString()}
           </span>
         )}
       </button>
       {expanded && (
-        <div className="border-t px-3 py-2 space-y-2 bg-gray-50">
+        <div className="border-t bg-gray-50 px-3 py-2.5 space-y-3">
           <div>
-            <p className="text-gray-400 text-xs mb-1">Input</p>
-            <pre className="whitespace-pre-wrap text-gray-700 text-xs">
-              {(() => { try { return JSON.stringify(pair.use.input, null, 2) } catch { return '[input]' } })()}
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">Input</p>
+            <pre className="whitespace-pre-wrap text-gray-700 text-xs leading-relaxed bg-white border border-gray-100 rounded p-2">
+              {inputStr}
             </pre>
           </div>
           {pair.result && (
             <div>
-              <p className="text-gray-400 text-xs mb-1">Result</p>
-              <pre className="whitespace-pre-wrap text-gray-600 text-xs max-h-48 overflow-y-auto">
+              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">Result</p>
+              <pre className="whitespace-pre-wrap text-gray-600 text-xs leading-relaxed max-h-56 overflow-y-auto bg-white border border-gray-100 rounded p-2">
                 {pair.result.result}
               </pre>
             </div>
@@ -197,44 +215,94 @@ function ToolCallRow({ pair }: { pair: ToolCallPair }) {
   )
 }
 
-function PhaseSection({ phase }: { phase: AgentPhase }) {
+// Renders agent thoughts as markdown prose
+function ThoughtBubble({ text, agentType }: { text: string; agentType: string }) {
+  const meta = AGENT_META[agentType] ?? AGENT_META.system
+  if (!text.trim()) return null
+  return (
+    <div className={`rounded-md border px-3 py-2.5 text-xs leading-relaxed ${meta.header} ${meta.border}`}>
+      <p className={`text-[10px] uppercase tracking-wider mb-1.5 opacity-60 ${meta.tool}`}>
+        {meta.icon} {meta.label} thoughts
+      </p>
+      <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0">
+        <Markdown>{text}</Markdown>
+      </div>
+    </div>
+  )
+}
+
+// Status badge for phase headers
+function AgentBadge({ agentType, label }: { agentType: string; label: string }) {
+  const meta = AGENT_META[agentType] ?? AGENT_META.system
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium ${meta.chip}`}>
+      <span>{meta.icon}</span>
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function PhaseSection({
+  phase,
+  showThoughts,
+}: {
+  phase: AgentPhase
+  showThoughts: boolean
+}) {
   const [collapsed, setCollapsed] = useState(false)
-  const style =
-    AGENT_STYLES[phase.agentType as keyof typeof AGENT_STYLES] ?? AGENT_STYLES.system
   const text = phase.textEvents.map((e) => e.text ?? '').join('')
+  const meta = AGENT_META[phase.agentType] ?? AGENT_META.system
+
+  // Status indicator for special phase types
+  const statusDecoration = phase.label === 'Complete'
+    ? <span className="ml-auto text-emerald-500 text-xs font-medium">✓ Done</span>
+    : phase.label === 'Error'
+    ? <span className="ml-auto text-red-500 text-xs font-medium">✗ Error</span>
+    : phase.label === 'Awaiting Approval'
+    ? <span className="ml-auto text-yellow-600 text-xs font-medium animate-pulse">⏳ HITL</span>
+    : phase.startTs
+    ? <span className="ml-auto text-[10px] text-gray-400">{new Date(phase.startTs).toLocaleTimeString()}</span>
+    : null
 
   return (
-    <div className={`border rounded overflow-hidden ${style.border}`}>
+    <div className={`rounded-lg border shadow-sm overflow-hidden ${meta.border}`}>
       <button
-        className={`w-full text-left px-3 py-2 flex items-center gap-2 border-b ${style.header}`}
+        type="button"
+        className={`w-full text-left px-4 py-2.5 flex items-center gap-2.5 ${meta.header} transition-colors hover:brightness-95`}
         onClick={() => setCollapsed((p) => !p)}
       >
-        <span className="text-gray-400 w-3 shrink-0">{collapsed ? '▶' : '▼'}</span>
-        <span className={`font-semibold text-sm ${style.text}`}>{phase.label}</span>
-        {phase.startTs && (
-          <span className="ml-auto text-xs text-gray-400">
-            {new Date(phase.startTs).toLocaleTimeString()}
-          </span>
-        )}
+        <span className="text-gray-400 w-3 shrink-0 text-center text-[10px]">
+          {collapsed ? '▸' : '▾'}
+        </span>
+        <AgentBadge agentType={phase.agentType} label={phase.label} />
+        {statusDecoration}
       </button>
+
       {!collapsed && (
-        <div className="p-3 space-y-2 bg-white">
-          {text && (
-            <div className="text-xs text-gray-700 leading-relaxed bg-gray-50 rounded p-2 max-h-32 overflow-y-auto">
-              {text}
-            </div>
+        <div className="bg-white p-3 space-y-2.5">
+          {/* Thought bubble (markdown rendered) */}
+          {showThoughts && text && (
+            <ThoughtBubble text={text} agentType={phase.agentType} />
           )}
+
+          {/* Tool call pairs */}
           {phase.toolPairs.map((pair, i) => (
-            <ToolCallRow key={`${pair.use.tool}-${pair.use.ts ?? i}`} pair={pair} />
+            <ToolCallRow
+              key={`${pair.use.tool}-${pair.use.ts ?? i}`}
+              pair={pair}
+              agentType={phase.agentType}
+            />
           ))}
+
+          {/* Pytest recheck output */}
           {phase.recheckEvent && (
             <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Pytest recheck</p>
+              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">Pytest recheck</p>
               <pre
-                className={`text-xs p-2 rounded border whitespace-pre-wrap max-h-48 overflow-y-auto ${
+                className={`text-xs p-2.5 rounded-md border whitespace-pre-wrap max-h-56 overflow-y-auto leading-relaxed ${
                   phase.recheckEvent.output?.includes('passed') &&
                   !phase.recheckEvent.output?.includes('failed')
-                    ? 'bg-green-50 border-green-200 text-green-800'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                     : 'bg-red-50 border-red-200 text-red-800'
                 }`}
               >
@@ -242,10 +310,18 @@ function PhaseSection({ phase }: { phase: AgentPhase }) {
               </pre>
             </div>
           )}
+
+          {/* Error event */}
           {phase.errorEvent && (
-            <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
-              Error: {phase.errorEvent.message}
+            <div className="bg-red-50 border border-red-200 rounded-md p-2.5 text-xs text-red-700 flex items-start gap-2">
+              <span>✗</span>
+              <span>{phase.errorEvent.message}</span>
             </div>
+          )}
+
+          {/* Empty phase placeholder */}
+          {!showThoughts && !text && phase.toolPairs.length === 0 && !phase.recheckEvent && !phase.errorEvent && (
+            <p className="text-xs text-gray-400 italic py-1">No tool activity recorded.</p>
           )}
         </div>
       )}
@@ -253,24 +329,124 @@ function PhaseSection({ phase }: { phase: AgentPhase }) {
   )
 }
 
+// QA-Coder interaction loop — groups consecutive qa/coder phases together
+function QACoderThread({
+  phases,
+  showThoughts,
+}: {
+  phases: AgentPhase[]
+  showThoughts: boolean
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const attemptLabel = phases[0]?.label.match(/Attempt (\d+)/)?.[1]
+
+  return (
+    <div className="rounded-lg border border-dashed border-gray-300 overflow-hidden">
+      <button
+        type="button"
+        className="w-full text-left px-4 py-2.5 flex items-center gap-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+        onClick={() => setExpanded((p) => !p)}
+      >
+        <span className="text-gray-400 w-3 text-[10px] text-center">{expanded ? '▾' : '▸'}</span>
+        <span className="text-xs font-semibold text-gray-600">
+          🔄 QA ↔ Coder Loop {attemptLabel ? `— Attempt ${attemptLabel}` : ''}
+        </span>
+        <span className="text-[10px] text-gray-400 ml-1">
+          ({phases.length} turn{phases.length !== 1 ? 's' : ''})
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          <span className="inline-block w-2 h-2 rounded-full bg-violet-400" title="QA" />
+          <span className="text-gray-300 text-[8px]">↔</span>
+          <span className="inline-block w-2 h-2 rounded-full bg-amber-400" title="Coder" />
+        </span>
+      </button>
+      {expanded && (
+        <div className="p-3 space-y-2 bg-white">
+          {phases.map((phase) => (
+            <PhaseSection key={phase.id} phase={phase} showThoughts={showThoughts} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Groups phases into reviewer phases and qa-coder loop clusters
+function clusterPhases(phases: AgentPhase[]): Array<
+  | { kind: 'single'; phase: AgentPhase }
+  | { kind: 'loop'; phases: AgentPhase[] }
+> {
+  const clusters: Array<{ kind: 'single'; phase: AgentPhase } | { kind: 'loop'; phases: AgentPhase[] }> = []
+  let loopBuffer: AgentPhase[] = []
+
+  function flushLoop() {
+    if (loopBuffer.length === 0) return
+    if (loopBuffer.length === 1) {
+      clusters.push({ kind: 'single', phase: loopBuffer[0] })
+    } else {
+      clusters.push({ kind: 'loop', phases: [...loopBuffer] })
+    }
+    loopBuffer = []
+  }
+
+  for (const phase of phases) {
+    if (phase.agentType === 'qa' || phase.agentType === 'coder') {
+      loopBuffer.push(phase)
+    } else {
+      flushLoop()
+      clusters.push({ kind: 'single', phase })
+    }
+  }
+  flushLoop()
+
+  return clusters
+}
+
+// ── Public component ───────────────────────────────────────────────────────
+
 export function AgentTimeline({
   events,
   defaultLabel = 'Agent',
+  showThoughts = false,
 }: {
   events: AgentEvent[]
   defaultLabel?: string
+  showThoughts?: boolean
 }) {
-  const phases = useMemo(() => groupIntoPhases(events, defaultLabel), [events, defaultLabel])
+  const filteredEvents = useMemo(
+    () =>
+      showThoughts
+        ? events
+        : events.filter(
+            (e) => !['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type),
+          ),
+    [events, showThoughts],
+  )
+
+  const phases = useMemo(
+    () => groupIntoPhases(filteredEvents, defaultLabel),
+    [filteredEvents, defaultLabel],
+  )
+
+  const clusters = useMemo(() => clusterPhases(phases), [phases])
 
   if (phases.length === 0) {
-    return <p className="text-xs text-gray-400 italic">Waiting for events…</p>
+    return (
+      <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center">
+        <p className="text-sm text-gray-400 italic">Waiting for events…</p>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-2">
-      {phases.map((phase) => (
-        <PhaseSection key={phase.id} phase={phase} />
-      ))}
+      {clusters.map((cluster, i) =>
+        cluster.kind === 'single' ? (
+          <PhaseSection key={cluster.phase.id} phase={cluster.phase} showThoughts={showThoughts} />
+        ) : (
+          <QACoderThread key={`loop-${i}`} phases={cluster.phases} showThoughts={showThoughts} />
+        ),
+      )}
     </div>
   )
 }

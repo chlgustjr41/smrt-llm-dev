@@ -13,6 +13,7 @@ export function LiveAgentView({
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
+  const [showThoughts, setShowThoughts] = useState(false)
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
@@ -54,13 +55,35 @@ export function LiveAgentView({
 
   return (
     <div className="space-y-3">
-      <AgentTimeline events={events} defaultLabel="Reviewer" />
-      {summary && <p className="text-sm text-gray-500 italic">{summary}</p>}
-      {!done && (
-        <div className="flex items-center gap-2 text-sm text-gray-400">
-          <span className="animate-pulse">●</span> Agent running…
-        </div>
-      )}
+      {/* Toolbar */}
+      <div className="flex items-center justify-between">
+        {!done ? (
+          <div className="flex items-center gap-2 text-sm text-blue-600">
+            <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            <span className="font-medium">🔍 Reviewer running…</span>
+          </div>
+        ) : summary ? (
+          <div className="flex items-center gap-2 text-sm text-emerald-600">
+            <span>✓</span>
+            <span>{summary}</span>
+          </div>
+        ) : (
+          <div />
+        )}
+        <button
+          type="button"
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+            showThoughts
+              ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+              : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+          }`}
+          onClick={() => setShowThoughts((p) => !p)}
+        >
+          <span>{showThoughts ? '🧠 Hide thoughts' : '🧠 Show thoughts'}</span>
+        </button>
+      </div>
+
+      <AgentTimeline events={events} defaultLabel="Reviewer" showThoughts={showThoughts} />
     </div>
   )
 }

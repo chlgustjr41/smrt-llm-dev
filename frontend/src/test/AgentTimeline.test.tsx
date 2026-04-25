@@ -13,7 +13,7 @@ describe('AgentTimeline', () => {
     const events: AgentEvent[] = [
       { type: 'text_delta', text: 'Analyzing code structure…', agent: 'reviewer' },
     ]
-    render(<AgentTimeline events={events} defaultLabel="Reviewer" />)
+    render(<AgentTimeline events={events} defaultLabel="Reviewer" showThoughts={true} />)
     expect(screen.getByText(/Analyzing code structure…/)).toBeInTheDocument()
   })
 
@@ -58,9 +58,9 @@ describe('AgentTimeline', () => {
       { type: 'session_status', status: 'coder_running', fix_attempt: 0, ts },
       { type: 'coder_text_delta', text: 'Fixing the bug…', agent: 'coder' },
     ]
-    render(<AgentTimeline events={events} />)
-    expect(screen.getByText(/QA Agent/)).toBeInTheDocument()
-    expect(screen.getByText(/Coder Agent/)).toBeInTheDocument()
+    render(<AgentTimeline events={events} showThoughts={true} />)
+    expect(screen.getAllByText(/QA Agent/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Coder/).length).toBeGreaterThan(0)
     expect(screen.getByText(/Running QA tests…/)).toBeInTheDocument()
     expect(screen.getByText(/Fixing the bug…/)).toBeInTheDocument()
   })
@@ -74,6 +74,32 @@ describe('AgentTimeline', () => {
     render(<AgentTimeline events={events} />)
     const pre = screen.getByText(/2 passed in 0\.5s/)
     expect(pre).toBeInTheDocument()
-    expect(pre).toHaveClass('bg-green-50')
+    expect(pre).toHaveClass('bg-emerald-50')
+  })
+
+  it('hides text_delta events by default', () => {
+    const events: AgentEvent[] = [
+      { type: 'text_delta', text: 'Hidden thought content', agent: 'reviewer' },
+    ]
+    render(<AgentTimeline events={events} defaultLabel="Reviewer" />)
+    expect(screen.queryByText(/Hidden thought content/)).not.toBeInTheDocument()
+  })
+
+  it('hides qa_text_delta and coder_text_delta events by default', () => {
+    const events = [
+      { type: 'qa_text_delta', content: 'qa-thought-hidden', ts: '2026-01-01T00:00:00Z' },
+      { type: 'coder_text_delta', content: 'coder-thought-hidden', ts: '2026-01-01T00:00:01Z' },
+    ]
+    render(<AgentTimeline events={events} />)
+    expect(screen.queryByText('qa-thought-hidden')).not.toBeInTheDocument()
+    expect(screen.queryByText('coder-thought-hidden')).not.toBeInTheDocument()
+  })
+
+  it('shows text_delta events when showThoughts is true', () => {
+    const events: AgentEvent[] = [
+      { type: 'text_delta', text: 'Visible thought content', agent: 'reviewer' },
+    ]
+    render(<AgentTimeline events={events} defaultLabel="Reviewer" showThoughts={true} />)
+    expect(screen.getByText(/Visible thought content/)).toBeInTheDocument()
   })
 })

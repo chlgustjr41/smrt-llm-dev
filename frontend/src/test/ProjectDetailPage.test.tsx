@@ -39,6 +39,30 @@ vi.mock('../components/DocPanel', () => ({
   ),
 }))
 
+vi.mock('../components/CostChart', () => ({
+  CostChart: ({ projectId }: { projectId: number }) => (
+    <div data-testid="cost-chart">CostChart:{projectId}</div>
+  ),
+}))
+
+vi.mock('../components/HeatmapChart', () => ({
+  HeatmapChart: ({ projectId }: { projectId: number }) => (
+    <div data-testid="heatmap-chart">HeatmapChart:{projectId}</div>
+  ),
+}))
+
+vi.mock('../components/DocScoreChart', () => ({
+  DocScoreChart: ({ projectId }: { projectId: number }) => (
+    <div data-testid="doc-score-chart">DocScoreChart:{projectId}</div>
+  ),
+}))
+
+vi.mock('../components/ProvenancePanel', () => ({
+  ProvenancePanel: ({ projectId }: { projectId: number }) => (
+    <div data-testid="provenance-panel">ProvenancePanel:{projectId}</div>
+  ),
+}))
+
 const server = setupServer(
   http.get('http://localhost/api/projects/1', () =>
     HttpResponse.json({
@@ -152,5 +176,25 @@ describe('ProjectDetailPage', () => {
   it('renders the DocPanel section', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('doc-panel')).toBeInTheDocument())
+  })
+
+  it('renders the CostChart dashboard section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('cost-chart')).toBeInTheDocument())
+  })
+
+  it('renders the HeatmapChart dashboard section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('heatmap-chart')).toBeInTheDocument())
+  })
+
+  it('renders the DocScoreChart dashboard section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('doc-score-chart')).toBeInTheDocument())
+  })
+
+  it('renders the ProvenancePanel dashboard section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('provenance-panel')).toBeInTheDocument())
   })
 })
