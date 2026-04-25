@@ -1,5 +1,7 @@
+import inspect
+
 import pytest
-import asyncio
+
 from smrt_agent.docs.backends import DocBackend, EndpointDoc, ModuleDoc, DecisionDoc
 
 
@@ -31,5 +33,4 @@ def test_decision_doc_fields():
 
 
 def test_doc_backend_is_abstract():
-    import inspect
     assert inspect.isabstract(DocBackend)
