@@ -66,7 +66,7 @@ async def create_qa_session(
 
 async def _session_task(
     *, project_id: int, session_id: str, canonical_path: str,
-    queue: asyncio.Queue, api_key: str, model_qa: str, model_coder: str,
+    queue: "EventLogger", api_key: str, model_qa: str, model_coder: str,
     budget_usd: float, max_fix_attempts: int,
 ) -> None:
     final_status = "error"
@@ -131,7 +131,10 @@ async def get_qa_session_events(
     for line in log_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
-            events.append(json.loads(line))
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
     return {"events": events}
 
 

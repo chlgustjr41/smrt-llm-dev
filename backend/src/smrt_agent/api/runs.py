@@ -69,7 +69,7 @@ async def _run_task(
     project_id: int,
     canonical_path: str,
     run_id: str,
-    queue: asyncio.Queue,
+    queue: "EventLogger",
     api_key: str,
     model: str,
     budget_usd: float,
@@ -133,7 +133,10 @@ async def get_run_events(
     for line in log_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
-            events.append(json.loads(line))
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
     return {"events": events}
 
 
