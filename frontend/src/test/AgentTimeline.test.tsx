@@ -72,6 +72,8 @@ describe('AgentTimeline', () => {
       { type: 'recheck_output', output: '2 passed in 0.5s', ts },
     ]
     render(<AgentTimeline events={events} />)
-    expect(screen.getByText(/2 passed in 0\.5s/)).toBeInTheDocument()
+    const pre = screen.getByText(/2 passed in 0\.5s/)
+    expect(pre).toBeInTheDocument()
+    expect(pre).toHaveClass('bg-green-50')
   })
 })

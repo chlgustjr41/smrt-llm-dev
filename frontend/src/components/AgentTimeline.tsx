@@ -166,7 +166,7 @@ function ToolCallRow({ pair }: { pair: ToolCallPair }) {
         <span className={`font-semibold ${style.tool}`}>{pair.use.tool}</span>
         {!expanded && (
           <span className="text-gray-400 truncate">
-            {JSON.stringify(pair.use.input).slice(0, 80)}
+            {(() => { try { return JSON.stringify(pair.use.input).slice(0, 80) } catch { return '[input]' } })()}
           </span>
         )}
         {pair.use.ts && (
@@ -180,7 +180,7 @@ function ToolCallRow({ pair }: { pair: ToolCallPair }) {
           <div>
             <p className="text-gray-400 text-xs mb-1">Input</p>
             <pre className="whitespace-pre-wrap text-gray-700 text-xs">
-              {JSON.stringify(pair.use.input, null, 2)}
+              {(() => { try { return JSON.stringify(pair.use.input, null, 2) } catch { return '[input]' } })()}
             </pre>
           </div>
           {pair.result && (
@@ -197,8 +197,8 @@ function ToolCallRow({ pair }: { pair: ToolCallPair }) {
   )
 }
 
-function PhaseSection({ phase, defaultOpen }: { phase: AgentPhase; defaultOpen: boolean }) {
-  const [collapsed, setCollapsed] = useState(!defaultOpen)
+function PhaseSection({ phase }: { phase: AgentPhase }) {
+  const [collapsed, setCollapsed] = useState(false)
   const style =
     AGENT_STYLES[phase.agentType as keyof typeof AGENT_STYLES] ?? AGENT_STYLES.system
   const text = phase.textEvents.map((e) => e.text ?? '').join('')
@@ -225,7 +225,7 @@ function PhaseSection({ phase, defaultOpen }: { phase: AgentPhase; defaultOpen: 
             </div>
           )}
           {phase.toolPairs.map((pair, i) => (
-            <ToolCallRow key={i} pair={pair} />
+            <ToolCallRow key={`${pair.use.tool}-${pair.use.ts ?? i}`} pair={pair} />
           ))}
           {phase.recheckEvent && (
             <div>
@@ -269,7 +269,7 @@ export function AgentTimeline({
   return (
     <div className="space-y-2">
       {phases.map((phase) => (
-        <PhaseSection key={phase.id} phase={phase} defaultOpen={true} />
+        <PhaseSection key={phase.id} phase={phase} />
       ))}
     </div>
   )
