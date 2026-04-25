@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { approveQASession, skipQASession } from '../api/qa_sessions'
 import { AgentTimeline, type AgentEvent } from './AgentTimeline'
 
@@ -14,6 +14,8 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const [done, setDone] = useState(false)
   const [actioning, setActioning] = useState(false)
   const [totalCost, setTotalCost] = useState(0)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
 
   useEffect(() => {
     const es = new EventSource(`/api/projects/${projectId}/qa-sessions/${sessionId}/stream`)
@@ -34,7 +36,7 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
       if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
         setDone(true)
         es.close()
-        onComplete?.(event.status ?? event.type)
+        onCompleteRef.current?.(event.status ?? event.type)
       }
     }
 

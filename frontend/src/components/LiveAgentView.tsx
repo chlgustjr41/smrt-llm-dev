@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AgentTimeline, type AgentEvent } from './AgentTimeline'
 
 export function LiveAgentView({
@@ -13,6 +13,8 @@ export function LiveAgentView({
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
 
   useEffect(() => {
     const es = new EventSource(`/api/projects/${projectId}/runs/${runId}/stream`)
@@ -29,16 +31,16 @@ export function LiveAgentView({
         )
         setDone(true)
         es.close()
-        onComplete?.('done')
+        onCompleteRef.current?.('done')
       } else if (event.type === 'budget_exceeded') {
         setSummary(`Budget limit reached ($${event.cost_usd?.toFixed(4)})`)
         setDone(true)
         es.close()
-        onComplete?.('error')
+        onCompleteRef.current?.('error')
       } else if (event.type === 'error') {
         setDone(true)
         es.close()
-        onComplete?.('error')
+        onCompleteRef.current?.('error')
       }
     }
 

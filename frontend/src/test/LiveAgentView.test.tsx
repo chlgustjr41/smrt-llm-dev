@@ -84,6 +84,7 @@ describe('LiveAgentView', () => {
       })
     })
     expect(screen.getByText(/list_files/i)).toBeInTheDocument()
+    expect(screen.queryByText(/src\/main\.py/i)).not.toBeInTheDocument()
     await user.click(screen.getByText(/list_files/i))
     expect(screen.getByText(/src\/main\.py/i)).toBeInTheDocument()
   })
