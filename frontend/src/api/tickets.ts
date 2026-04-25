@@ -6,6 +6,6 @@ export interface Ticket {
   content: string
 }
 
-export async function listTickets(projectId: number): Promise<Ticket[]> {
-  return apiFetch<Ticket[]>(`/projects/${projectId}/tickets`)
+export async function listTickets(projectId: number, signal?: AbortSignal): Promise<Ticket[]> {
+  return apiFetch<Ticket[]>(`/projects/${projectId}/tickets`, { signal })
 }

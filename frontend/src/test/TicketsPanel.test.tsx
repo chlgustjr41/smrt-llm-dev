@@ -50,6 +50,7 @@ describe('TicketsPanel', () => {
     const user = userEvent.setup()
     render(<TicketsPanel projectId={1} />)
     await waitFor(() => screen.getByText('2026-04-24-001'))
+    expect(screen.queryByText(/The endpoint is missing from the router/)).not.toBeInTheDocument()
     await user.click(screen.getByText('2026-04-24-001'))
     expect(screen.getByText(/The endpoint is missing from the router/)).toBeInTheDocument()
   })

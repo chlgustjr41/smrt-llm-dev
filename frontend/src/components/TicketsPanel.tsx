@@ -31,14 +31,16 @@ export function TicketsPanel({
   refreshKey?: number
 }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
-    listTickets(projectId)
-      .then(setTickets)
-      .catch(() => setTickets([]))
-      .finally(() => setLoading(false))
+    listTickets(projectId, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setTickets(data) })
+      .catch(() => { if (!controller.signal.aborted) setTickets([]) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
   }, [projectId, refreshKey])
 
   if (loading) return <p className="text-xs text-gray-400">Loading tickets…</p>
