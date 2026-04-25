@@ -29,6 +29,11 @@ class UserCreate(BaseModel):
     password: str
 
 
+class UserOut(BaseModel):
+    id: int
+    email: str
+
+
 class TodoCreate(BaseModel):
     title: str
     owner_id: int
@@ -57,7 +62,7 @@ async def health():
 
 # ─── Users ───────────────────────────────────────────────────────────────────
 
-@app.post("/users", status_code=status.HTTP_201_CREATED)
+@app.post("/users", status_code=status.HTTP_201_CREATED, response_model=UserOut)
 async def create_user(body: UserCreate):
     global _user_seq
     _user_seq += 1
@@ -67,12 +72,12 @@ async def create_user(body: UserCreate):
         "password_hash": f"hashed:{body.password}",  # never expose in responses
     }
     _users[_user_seq] = user
-    return user  # BUG #1: password_hash exposed in response
+    return user
 
 
-@app.get("/users")
+@app.get("/users", response_model=list[UserOut])
 async def list_users():
-    return list(_users.values())  # BUG #1: password_hash exposed for all users
+    return list(_users.values())
 
 
 # ─── Todos ───────────────────────────────────────────────────────────────────
@@ -91,7 +96,7 @@ async def create_todo(body: TodoCreate):
         "done": False,
     }
 
-    _save_todo(todo)  # BUG #2: missing `await` — write is silently dropped
+    await _save_todo(todo)  # FIX #2: added missing `await` so the write is persisted
     return todo
 
 
@@ -118,11 +123,11 @@ async def delete_todo(todo_id: int, caller_id: int = 0):
     if todo is None:
         raise HTTPException(status_code=404, detail="Todo not found")
 
-    # BUG #3: ownership check happens AFTER the delete
-    del _todos[todo_id]
-
+    # FIX #3: ownership check moved BEFORE the delete so a 403 leaves the todo intact
     if todo["owner_id"] != caller_id:
         raise HTTPException(status_code=403, detail="Not your todo")
+
+    del _todos[todo_id]
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
