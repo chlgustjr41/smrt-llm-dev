@@ -1,3 +1,4 @@
+import React from 'react'
 import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
@@ -6,18 +7,18 @@ import { DocScoreChart } from '../components/DocScoreChart'
 import type { DocScoreEntry } from '../api/stats'
 
 vi.mock('recharts', () => ({
-  LineChart: ({ data }: any) => (
+  LineChart: ({ data }: { data: Array<{ date: string; score: number }> }) => (
     <div data-testid="line-chart">
-      {data?.map((d: any, i: number) => (
+      {data?.map((d, i) => (
         <div key={i} data-testid="line-point" data-score={d.score}>{d.score}</div>
       ))}
     </div>
   ),
   Line: () => null,
-  XAxis: ({ dataKey }: any) => <div data-testid="x-axis" data-key={dataKey} />,
+  XAxis: ({ dataKey }: { dataKey: string }) => <div data-testid="x-axis" data-key={dataKey} />,
   YAxis: () => null,
   Tooltip: () => null,
-  ResponsiveContainer: ({ children }: any) => <div>{children}</div>,
+  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   CartesianGrid: () => null,
 }))
 
@@ -75,7 +76,7 @@ describe('DocScoreChart', () => {
     )
   })
 
-  it('chart renders with correct data and formatted date is used', async () => {
+  it('renders correct number of data points', async () => {
     render(<DocScoreChart projectId={1} />)
     await waitFor(() => expect(screen.getByTestId('line-chart')).toBeInTheDocument())
     // Verify both score values are rendered as data points in the chart

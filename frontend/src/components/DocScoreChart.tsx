@@ -54,7 +54,6 @@ export function DocScoreChart({ projectId }: { projectId: number }) {
           type="monotone"
           dataKey="score"
           stroke="#6366f1"
-          dot={true}
         />
       </LineChart>
     </ResponsiveContainer>
