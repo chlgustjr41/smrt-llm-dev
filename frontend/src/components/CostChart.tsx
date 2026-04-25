@@ -24,8 +24,8 @@ export function CostChart({ projectId }: { projectId: number }) {
     return () => controller.abort()
   }, [projectId])
 
-  if (!data) return <p className="text-xs text-gray-400">Loading cost data…</p>
   if (error) return <p className="text-xs text-red-500">{error}</p>
+  if (!data) return <p className="text-xs text-gray-400">Loading cost data…</p>
   if (data.length === 0)
     return <p className="text-xs text-gray-400 italic">No audit runs recorded yet.</p>
 
