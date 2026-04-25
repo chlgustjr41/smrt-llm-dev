@@ -8,6 +8,10 @@ import { QASessionView } from '../components/QASessionView'
 import { TicketsPanel } from '../components/TicketsPanel'
 import { PastRunViewer } from '../components/PastRunViewer'
 import { DocPanel } from '../components/DocPanel'
+import { CostChart } from '../components/CostChart'
+import { HeatmapChart } from '../components/HeatmapChart'
+import { DocScoreChart } from '../components/DocScoreChart'
+import { ProvenancePanel } from '../components/ProvenancePanel'
 
 function StatusBadge({ status }: { status: string }) {
   const cls =
@@ -241,6 +245,41 @@ export function ProjectDetailPage() {
           Documentation
         </h2>
         <DocPanel projectId={projectId} />
+      </div>
+
+      {/* ── Dashboards ── */}
+      <div className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-6">
+          Dashboards
+        </h2>
+
+        <div className="mb-6">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+            Audit Cost Breakdown
+          </h3>
+          <CostChart projectId={projectId} />
+        </div>
+
+        <div className="mb-6">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+            Bug-Hunt Heatmap
+          </h3>
+          <HeatmapChart projectId={projectId} />
+        </div>
+
+        <div className="mb-6">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+            Documentation Completeness
+          </h3>
+          <DocScoreChart projectId={projectId} />
+        </div>
+
+        <div className="mb-6">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+            Change Provenance
+          </h3>
+          <ProvenancePanel projectId={projectId} />
+        </div>
       </div>
     </div>
   )
