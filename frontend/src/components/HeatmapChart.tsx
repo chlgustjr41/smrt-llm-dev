@@ -9,20 +9,22 @@ interface TreeNode {
   path: string
 }
 
-interface SelectedCell {
-  name: string
-  size: number
-  bugs_resolved: number
-  path: string
-}
-
 function bugColor(bugs: number): string {
   if (bugs === 0) return '#e5e7eb'
   if (bugs === 1) return '#fbbf24'
   return '#ef4444'
 }
 
-function CustomContent(props: any) {
+interface CustomContentProps {
+  x: number
+  y: number
+  width: number
+  height: number
+  name: string
+  bugs_resolved: number
+}
+
+function CustomContent(props: CustomContentProps) {
   const { x, y, width, height, name, bugs_resolved } = props
   if (width < 2 || height < 2) return null
   return (
@@ -56,7 +58,7 @@ function CustomContent(props: any) {
 export function HeatmapChart({ projectId }: { projectId: number }) {
   const [data, setData] = useState<HeatmapEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [selected, setSelected] = useState<SelectedCell | null>(null)
+  const [selected, setSelected] = useState<TreeNode | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -80,15 +82,9 @@ export function HeatmapChart({ projectId }: { projectId: number }) {
     path: entry.file,
   }))
 
-  function handleClick(node: any) {
-    const cell: SelectedCell = {
-      name: node.name,
-      size: node.size,
-      bugs_resolved: node.bugs_resolved,
-      path: node.path,
-    }
+  function handleClick(node: TreeNode) {
     setSelected((prev) =>
-      prev && prev.name === cell.name ? null : cell,
+      prev && prev.name === node.name ? null : node,
     )
   }
 

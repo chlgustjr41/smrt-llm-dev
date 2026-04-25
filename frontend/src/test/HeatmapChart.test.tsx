@@ -1,3 +1,4 @@
+import React from 'react'
 import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -6,9 +7,9 @@ import { setupServer } from 'msw/node'
 import { HeatmapChart } from '../components/HeatmapChart'
 
 vi.mock('recharts', () => ({
-  Treemap: ({ data, onClick, content }: any) => (
+  Treemap: ({ data, onClick }: { data: Array<{ name: string; size: number; bugs_resolved: number; path: string }>; onClick?: (node: any) => void }) => (
     <div data-testid="treemap">
-      {data?.map((d: any, i: number) => (
+      {data?.map((d, i) => (
         <div
           key={i}
           data-testid="treemap-cell"
@@ -20,7 +21,7 @@ vi.mock('recharts', () => ({
       ))}
     </div>
   ),
-  ResponsiveContainer: ({ children }: any) => <div>{children}</div>,
+  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
 const mockData = [
