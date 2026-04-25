@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { LiveAgentView } from '../components/LiveAgentView'
 
 class MockEventSource {
@@ -43,28 +44,48 @@ describe('LiveAgentView', () => {
   it('renders text_delta events', () => {
     render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     act(() => {
-      MockEventSource.instance?.emit({ type: 'text_delta', text: 'Analyzing source tree…' })
+      MockEventSource.instance?.emit({
+        type: 'text_delta',
+        text: 'Analyzing source tree…',
+        agent: 'reviewer',
+      })
     })
     expect(screen.getByText('Analyzing source tree…')).toBeInTheDocument()
   })
 
-  it('renders tool_use events', () => {
+  it('renders tool_use events showing tool name', () => {
     render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     act(() => {
-      MockEventSource.instance?.emit({ type: 'tool_use', tool: 'list_files', input: {} })
+      MockEventSource.instance?.emit({
+        type: 'tool_use',
+        tool: 'list_files',
+        input: {},
+        agent: 'reviewer',
+      })
     })
     expect(screen.getByText(/list_files/i)).toBeInTheDocument()
   })
 
-  it('renders tool_result events', () => {
+  it('shows tool result after expanding a tool call row', async () => {
+    const user = userEvent.setup()
     render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     act(() => {
+      MockEventSource.instance?.emit({
+        type: 'tool_use',
+        tool: 'list_files',
+        input: { subdir: '' },
+        agent: 'reviewer',
+      })
       MockEventSource.instance?.emit({
         type: 'tool_result',
         tool: 'list_files',
         result: 'src/main.py',
+        agent: 'reviewer',
       })
     })
+    expect(screen.getByText(/list_files/i)).toBeInTheDocument()
+    expect(screen.queryByText(/src\/main\.py/i)).not.toBeInTheDocument()
+    await user.click(screen.getByText(/list_files/i))
     expect(screen.getByText(/src\/main\.py/i)).toBeInTheDocument()
   })
 

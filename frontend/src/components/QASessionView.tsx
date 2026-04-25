@@ -1,17 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { approveQASession, skipQASession } from '../api/qa_sessions'
-
-interface QAEvent {
-  type: string
-  text?: string
-  tool?: string
-  agent?: string
-  status?: string
-  ticket_id?: string
-  fix_attempt?: number
-  message?: string
-  output?: string
-}
+import { AgentTimeline, type AgentEvent } from './AgentTimeline'
 
 interface Props {
   projectId: number
@@ -20,17 +9,19 @@ interface Props {
 }
 
 export function QASessionView({ projectId, sessionId, onComplete }: Props) {
-  const [events, setEvents] = useState<QAEvent[]>([])
+  const [events, setEvents] = useState<AgentEvent[]>([])
   const [hitlTicket, setHitlTicket] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [actioning, setActioning] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [totalCost, setTotalCost] = useState(0)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
 
   useEffect(() => {
     const es = new EventSource(`/api/projects/${projectId}/qa-sessions/${sessionId}/stream`)
 
     es.onmessage = (evt) => {
-      const event: QAEvent = JSON.parse(evt.data)
+      const event: AgentEvent = JSON.parse(evt.data)
       setEvents((prev) => [...prev, event])
 
       if (event.type === 'hitl_request' && event.ticket_id) {
@@ -39,10 +30,13 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
       if (event.type === 'session_status' && event.status !== 'hitl_waiting') {
         setHitlTicket(null)
       }
+      if (event.type === 'qa_done' || event.type === 'coder_done') {
+        setTotalCost((prev) => prev + (event.cost_usd ?? 0))
+      }
       if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
         setDone(true)
         es.close()
-        onComplete?.(event.status ?? event.type)
+        onCompleteRef.current?.(event.status ?? event.type)
       }
     }
 
@@ -53,12 +47,6 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
 
     return () => es.close()
   }, [projectId, sessionId])
-
-  useEffect(() => {
-    if (bottomRef.current && typeof bottomRef.current.scrollIntoView === 'function') {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [events])
 
   async function handleApprove() {
     setActioning(true)
@@ -81,40 +69,12 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   }
 
   return (
-    <div className="border rounded p-4 bg-gray-50 space-y-3">
-      <div className="max-h-64 overflow-y-auto font-mono text-xs space-y-0.5">
-        {events.map((evt, i) => {
-          if (evt.type === 'qa_text_delta' || evt.type === 'coder_text_delta') {
-            return <span key={i} className="text-gray-700">{evt.text}</span>
-          }
-          if (evt.type === 'tool_use') {
-            return (
-              <div key={i} className="text-blue-600">
-                [{evt.agent}] → {evt.tool}
-              </div>
-            )
-          }
-          if (evt.type === 'session_status') {
-            return (
-              <div key={i} className="text-purple-700 font-semibold">
-                ◆ {evt.status}{evt.fix_attempt !== undefined ? ` (attempt ${evt.fix_attempt})` : ''}
-              </div>
-            )
-          }
-          if (evt.type === 'recheck_output') {
-            return (
-              <pre key={i} className="text-yellow-700 whitespace-pre-wrap">
-                {evt.output}
-              </pre>
-            )
-          }
-          if (evt.type === 'error') {
-            return <div key={i} className="text-red-600">Error: {evt.message}</div>
-          }
-          return null
-        })}
-        <div ref={bottomRef} />
-      </div>
+    <div className="space-y-3">
+      <AgentTimeline events={events} />
+
+      {totalCost > 0 && (
+        <p className="text-xs text-gray-400">Running cost: ${totalCost.toFixed(4)}</p>
+      )}
 
       {hitlTicket && !done && (
         <div className="p-3 border border-yellow-300 bg-yellow-50 rounded">
@@ -140,9 +100,7 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
         </div>
       )}
 
-      {done && (
-        <p className="text-xs text-gray-400">Session complete.</p>
-      )}
+      {done && <p className="text-xs text-gray-400">Session complete.</p>}
     </div>
   )
 }

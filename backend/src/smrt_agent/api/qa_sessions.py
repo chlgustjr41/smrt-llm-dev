@@ -3,6 +3,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from smrt_agent.api.deps import get_db
 from smrt_agent.db.models import Project, QASession
 from smrt_agent.db.session import get_engine, get_session_factory
+from smrt_agent.event_log import EventLogger
 from smrt_agent.settings import Settings
 from smrt_agent.agents.orchestrator import run_qa_session
 
@@ -39,13 +41,19 @@ async def create_qa_session(
 
     queue: asyncio.Queue = asyncio.Queue()
     _queues[session_id] = queue
+
+    logged_queue = EventLogger(
+        queue,
+        Path(project.canonical_path) / ".smrt" / "qa-sessions" / f"{session_id}.jsonl",
+    )
+
     settings = Settings()
 
     asyncio.create_task(_session_task(
         project_id=project_id,
         session_id=session_id,
         canonical_path=project.canonical_path,
-        queue=queue,
+        queue=logged_queue,
         api_key=settings.anthropic_api_key,
         model_qa=settings.model_qa,
         model_coder=settings.model_coder,
@@ -58,10 +66,9 @@ async def create_qa_session(
 
 async def _session_task(
     *, project_id: int, session_id: str, canonical_path: str,
-    queue: asyncio.Queue, api_key: str, model_qa: str, model_coder: str,
+    queue: "EventLogger", api_key: str, model_qa: str, model_coder: str,
     budget_usd: float, max_fix_attempts: int,
 ) -> None:
-    from pathlib import Path
     final_status = "error"
     try:
         engine = get_engine(force_new=False)
@@ -106,6 +113,29 @@ async def _session_task(
         except Exception:
             pass
         await queue.put({"type": "done", "status": final_status})
+
+
+@router.get("/{project_id}/qa-sessions/{session_id}/events")
+async def get_qa_session_events(
+    project_id: int,
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    log_path = Path(project.canonical_path) / ".smrt" / "qa-sessions" / f"{session_id}.jsonl"
+    if not log_path.exists():
+        return {"events": []}
+    events = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return {"events": events}
 
 
 @router.get("/{project_id}/qa-sessions/{session_id}/stream")

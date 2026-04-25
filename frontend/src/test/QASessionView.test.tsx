@@ -96,4 +96,19 @@ describe('QASessionView', () => {
     render(<QASessionView projectId={1} sessionId="sess-1" />)
     await waitFor(() => expect(screen.getByText(/session complete/i)).toBeInTheDocument())
   })
+
+  it('shows tool input after expanding a tool call in the timeline', async () => {
+    const user = userEvent.setup()
+    _sseScenario = [
+      { type: 'session_status', status: 'qa_running', fix_attempt: 0, ts: new Date().toISOString() },
+      { type: 'tool_use', tool: 'list_files', input: { subdir: '' }, agent: 'qa' },
+      { type: 'tool_result', tool: 'list_files', result: '["main.py"]', agent: 'qa' },
+      { type: 'done', status: 'done' },
+    ]
+    render(<QASessionView projectId={1} sessionId="sess-1" />)
+    await waitFor(() => screen.getByText(/list_files/))
+    expect(screen.queryByText(/\["main\.py"\]/)).not.toBeInTheDocument()
+    await user.click(screen.getByText(/list_files/))
+    expect(screen.getByText(/\["main\.py"\]/)).toBeInTheDocument()
+  })
 })
