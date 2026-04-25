@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getProject, listRuns, type Project, type AgentRunSummary } from '../api/projects'
 import { createRun } from '../api/runs'
@@ -165,8 +165,8 @@ export function ProjectDetailPage() {
             </thead>
             <tbody>
               {pastRuns.map((run) => (
-                <>
-                  <tr key={run.run_id} className="border-t hover:bg-gray-50">
+                <React.Fragment key={run.run_id}>
+                  <tr className="border-t hover:bg-gray-50">
                     <td className="px-3 py-2 font-mono text-xs text-gray-600 truncate max-w-[12rem]">
                       {run.run_id}
                     </td>
@@ -183,12 +183,12 @@ export function ProjectDetailPage() {
                       {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
                     </td>
                   </tr>
-                  <tr key={`${run.run_id}-events`} className="border-t bg-gray-50">
+                  <tr className="border-t bg-gray-50">
                     <td colSpan={5} className="px-3">
                       <PastRunViewer projectId={projectId} runId={run.run_id} />
                     </td>
                   </tr>
-                </>
+                </React.Fragment>
               ))}
             </tbody>
           </table>

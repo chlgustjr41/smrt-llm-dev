@@ -13,14 +13,17 @@ vi.mock('../components/LiveAgentView', () => ({
 }))
 
 vi.mock('../components/QASessionView', () => ({
-  QASessionView: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="qa-session-view">QASessionView:{sessionId}</div>
+  QASessionView: ({ sessionId, onComplete }: { sessionId: string; onComplete?: (status: string) => void }) => (
+    <div data-testid="qa-session-view">
+      QASessionView:{sessionId}
+      <button onClick={() => onComplete?.('done')}>complete-qa</button>
+    </div>
   ),
 }))
 
 vi.mock('../components/TicketsPanel', () => ({
-  TicketsPanel: ({ projectId }: { projectId: number }) => (
-    <div data-testid="tickets-panel">TicketsPanel:{projectId}</div>
+  TicketsPanel: ({ projectId, refreshKey }: { projectId: number; refreshKey?: number }) => (
+    <div data-testid="tickets-panel">TicketsPanel:{projectId}:{refreshKey ?? 0}</div>
   ),
 }))
 
@@ -103,6 +106,19 @@ describe('ProjectDetailPage', () => {
   it('renders the TicketsPanel section', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('tickets-panel')).toBeInTheDocument())
+  })
+
+  it('increments ticketsRefreshKey when QA session completes', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /run qa session/i }))
+    await user.click(screen.getByRole('button', { name: /run qa session/i }))
+    await waitFor(() => screen.getByTestId('qa-session-view'))
+    expect(screen.getByText(/TicketsPanel:1:0/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /complete-qa/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/TicketsPanel:1:1/)).toBeInTheDocument()
+    )
   })
 
   it('shows PastRunViewer in run history when past runs exist', async () => {
