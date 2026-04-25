@@ -7,6 +7,7 @@ import { createQASession } from '../api/qa_sessions'
 import { QASessionView } from '../components/QASessionView'
 import { TicketsPanel } from '../components/TicketsPanel'
 import { PastRunViewer } from '../components/PastRunViewer'
+import { DocPanel } from '../components/DocPanel'
 
 function StatusBadge({ status }: { status: string }) {
   const cls =
@@ -232,6 +233,14 @@ export function ProjectDetailPage() {
           Bug Tickets
         </h2>
         <TicketsPanel projectId={projectId} refreshKey={ticketsRefreshKey} />
+      </div>
+
+      {/* ── Documentation ── */}
+      <div className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          Documentation
+        </h2>
+        <DocPanel projectId={projectId} />
       </div>
     </div>
   )
