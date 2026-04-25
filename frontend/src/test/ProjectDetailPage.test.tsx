@@ -33,6 +33,12 @@ vi.mock('../components/PastRunViewer', () => ({
   ),
 }))
 
+vi.mock('../components/DocPanel', () => ({
+  DocPanel: ({ projectId }: { projectId: number }) => (
+    <div data-testid="doc-panel">DocPanel:{projectId}</div>
+  ),
+}))
+
 const server = setupServer(
   http.get('http://localhost/api/projects/1', () =>
     HttpResponse.json({
@@ -141,5 +147,10 @@ describe('ProjectDetailPage', () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('past-run-viewer')).toBeInTheDocument())
     expect(screen.getByText(/PastRunViewer:run-old-123/)).toBeInTheDocument()
+  })
+
+  it('renders the DocPanel section', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('doc-panel')).toBeInTheDocument())
   })
 })
