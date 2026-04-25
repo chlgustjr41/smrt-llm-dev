@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import date
+import json
 from pathlib import Path
 
 
@@ -93,8 +95,7 @@ class ObsidianBackend(DocBackend):
         self.project_path = project_path
 
     def _frontmatter(self, type_: str, tags: list[str]) -> str:
-        from datetime import date
-        tag_str = "[" + ", ".join(tags) + "]" if tags else "[]"
+        tag_str = json.dumps(tags)
         return (
             "---\n"
             f"type: {type_}\n"
