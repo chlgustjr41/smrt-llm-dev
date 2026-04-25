@@ -86,3 +86,55 @@ class GitHubBackend(DocBackend):
             f"## Consequences\n{decision.consequences}\n",
             encoding="utf-8",
         )
+
+
+class ObsidianBackend(DocBackend):
+    def __init__(self, project_path: Path) -> None:
+        self.project_path = project_path
+
+    def _frontmatter(self, type_: str, tags: list[str]) -> str:
+        from datetime import date
+        tag_str = "[" + ", ".join(tags) + "]" if tags else "[]"
+        return (
+            "---\n"
+            f"type: {type_}\n"
+            f"tags: {tag_str}\n"
+            f"updated: {date.today().isoformat()}\n"
+            "---\n\n"
+        )
+
+    async def upsert_module_doc(self, module: ModuleDoc) -> None:
+        slug = module.name.replace(".", "__").replace("/", "__")
+        path = self.project_path / "wiki" / "modules" / f"{slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            self._frontmatter("module", module.tags)
+            + f"# {module.name}\n\n{module.description}\n\n**File:** `{module.file_path}`\n",
+            encoding="utf-8",
+        )
+
+    async def upsert_endpoint_doc(self, endpoint: EndpointDoc) -> None:
+        slug = endpoint.path.strip("/").replace("/", "_") or "root"
+        filename = f"{endpoint.method}_{slug}.md"
+        path = self.project_path / "wiki" / "api" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        auth = "Required" if endpoint.auth_required else "None"
+        path.write_text(
+            self._frontmatter("endpoint", endpoint.tags)
+            + f"# {endpoint.method} {endpoint.path}\n\n"
+            f"**Authentication:** {auth}\n\n"
+            f"**Purpose:** {endpoint.purpose}\n",
+            encoding="utf-8",
+        )
+
+    async def upsert_decision(self, decision: DecisionDoc) -> None:
+        path = self.project_path / "wiki" / "decisions" / f"{decision.slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            self._frontmatter("decision", decision.tags)
+            + f"# {decision.title}\n\n"
+            f"## Context\n{decision.context}\n\n"
+            f"## Decision\n{decision.decision}\n\n"
+            f"## Consequences\n{decision.consequences}\n",
+            encoding="utf-8",
+        )
