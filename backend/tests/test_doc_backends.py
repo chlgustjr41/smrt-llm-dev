@@ -131,3 +131,17 @@ def test_obsidian_backend_writes_decision_doc(tmp_path):
     out = (tmp_path / "wiki" / "decisions" / "2026-04-24-chose-jwt.md").read_text()
     assert "type: decision" in out
     assert "# Use JWT" in out
+
+
+def test_jira_backend_raises_not_implemented():
+    from smrt_agent.docs.backends import JiraBackend
+    backend = JiraBackend()
+    with pytest.raises(NotImplementedError, match="v2"):
+        asyncio.run(backend.upsert_module_doc(ModuleDoc(name="x", description="x", file_path="x")))
+
+
+def test_confluence_backend_raises_not_implemented():
+    from smrt_agent.docs.backends import ConfluenceBackend
+    backend = ConfluenceBackend()
+    with pytest.raises(NotImplementedError, match="v2"):
+        asyncio.run(backend.upsert_endpoint_doc(EndpointDoc(method="GET", path="/", auth_required=False, purpose="x")))

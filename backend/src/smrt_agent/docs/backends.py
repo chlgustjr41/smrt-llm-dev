@@ -139,3 +139,25 @@ class ObsidianBackend(DocBackend):
             f"## Consequences\n{decision.consequences}\n",
             encoding="utf-8",
         )
+
+
+class JiraBackend(DocBackend):
+    async def upsert_module_doc(self, module: ModuleDoc) -> None:
+        raise NotImplementedError("Jira backend is a v2 feature")
+
+    async def upsert_endpoint_doc(self, endpoint: EndpointDoc) -> None:
+        raise NotImplementedError("Jira backend is a v2 feature")
+
+    async def upsert_decision(self, decision: DecisionDoc) -> None:
+        raise NotImplementedError("Jira backend is a v2 feature")
+
+
+class ConfluenceBackend(DocBackend):
+    async def upsert_module_doc(self, module: ModuleDoc) -> None:
+        raise NotImplementedError("Confluence backend is a v2 feature")
+
+    async def upsert_endpoint_doc(self, endpoint: EndpointDoc) -> None:
+        raise NotImplementedError("Confluence backend is a v2 feature")
+
+    async def upsert_decision(self, decision: DecisionDoc) -> None:
+        raise NotImplementedError("Confluence backend is a v2 feature")
