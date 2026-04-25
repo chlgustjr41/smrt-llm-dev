@@ -13,6 +13,7 @@ export function LiveAgentView({
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
+  const [showThoughts, setShowThoughts] = useState(false)
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
@@ -54,7 +55,15 @@ export function LiveAgentView({
 
   return (
     <div className="space-y-3">
-      <AgentTimeline events={events} defaultLabel="Reviewer" />
+      <div className="flex justify-end">
+        <button
+          className="text-xs text-gray-500 underline"
+          onClick={() => setShowThoughts((p) => !p)}
+        >
+          {showThoughts ? 'Hide thoughts' : 'Show thoughts'}
+        </button>
+      </div>
+      <AgentTimeline events={events} defaultLabel="Reviewer" showThoughts={showThoughts} />
       {summary && <p className="text-sm text-gray-500 italic">{summary}</p>}
       {!done && (
         <div className="flex items-center gap-2 text-sm text-gray-400">

@@ -14,6 +14,7 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const [done, setDone] = useState(false)
   const [actioning, setActioning] = useState(false)
   const [totalCost, setTotalCost] = useState(0)
+  const [showThoughts, setShowThoughts] = useState(false)
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
@@ -70,7 +71,15 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
 
   return (
     <div className="space-y-3">
-      <AgentTimeline events={events} />
+      <div className="flex justify-end">
+        <button
+          className="text-xs text-gray-500 underline"
+          onClick={() => setShowThoughts((p) => !p)}
+        >
+          {showThoughts ? 'Hide thoughts' : 'Show thoughts'}
+        </button>
+      </div>
+      <AgentTimeline events={events} showThoughts={showThoughts} />
 
       {totalCost > 0 && (
         <p className="text-xs text-gray-400">Running cost: ${totalCost.toFixed(4)}</p>

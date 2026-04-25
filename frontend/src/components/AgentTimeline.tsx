@@ -256,11 +256,17 @@ function PhaseSection({ phase }: { phase: AgentPhase }) {
 export function AgentTimeline({
   events,
   defaultLabel = 'Agent',
+  showThoughts = false,
 }: {
   events: AgentEvent[]
   defaultLabel?: string
+  showThoughts?: boolean
 }) {
-  const phases = useMemo(() => groupIntoPhases(events, defaultLabel), [events, defaultLabel])
+  const filteredEvents = useMemo(
+    () => (showThoughts ? events : events.filter((e) => e.type !== 'text_delta')),
+    [events, showThoughts],
+  )
+  const phases = useMemo(() => groupIntoPhases(filteredEvents, defaultLabel), [filteredEvents, defaultLabel])
 
   if (phases.length === 0) {
     return <p className="text-xs text-gray-400 italic">Waiting for events…</p>

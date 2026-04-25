@@ -41,7 +41,8 @@ describe('LiveAgentView', () => {
     expect(MockEventSource.instance?.url).toBe('/api/projects/1/runs/run-abc-123/stream')
   })
 
-  it('renders text_delta events', () => {
+  it('renders text_delta events', async () => {
+    const user = userEvent.setup()
     render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     act(() => {
       MockEventSource.instance?.emit({
@@ -50,6 +51,8 @@ describe('LiveAgentView', () => {
         agent: 'reviewer',
       })
     })
+    // text_delta hidden by default; click Show thoughts to reveal
+    await user.click(screen.getByText('Show thoughts'))
     expect(screen.getByText('Analyzing source tree…')).toBeInTheDocument()
   })
 
@@ -115,5 +118,25 @@ describe('LiveAgentView', () => {
     const { unmount } = render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     unmount()
     expect(MockEventSource.instance?.closed).toBe(true)
+  })
+
+  it('toggles thought visibility when Show thoughts button clicked', async () => {
+    const user = userEvent.setup()
+    render(<LiveAgentView projectId={1} runId="run-abc-123" />)
+    act(() => {
+      MockEventSource.instance?.emit({
+        type: 'text_delta',
+        text: 'Toggle thought text',
+        agent: 'reviewer',
+      })
+    })
+    // Initially hidden
+    expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
+    // Click Show thoughts — now visible
+    await user.click(screen.getByText('Show thoughts'))
+    expect(screen.getByText('Toggle thought text')).toBeInTheDocument()
+    // Click Hide thoughts — hidden again
+    await user.click(screen.getByText('Hide thoughts'))
+    expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
   })
 })
