@@ -13,7 +13,7 @@ def compute_doc_score(project_path: Path) -> dict:
     try:
         _, endpoints = load_and_parse(project_path)
         ep_total = len(endpoints)
-    except (FileNotFoundError, ValueError):
+    except Exception:
         ep_total = 0
 
     mod_total = 1  # one primary module doc per project
