@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import AgentRunOut, ProjectConfig, ProjectConfigPatch, ProjectCreate, ProjectOut
-from smrt_agent.db.models import AgentRun, Project
+from smrt_agent.db.models import AgentRun, Project, QASession
 from smrt_agent.platform_paths import canonicalize
 from smrt_agent.settings import Settings
 
@@ -87,7 +87,9 @@ async def delete_project(
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    # Cascade deletes associated AgentRun rows via the relationship
+    sessions = await db.execute(select(QASession).where(QASession.project_id == project_id))
+    for session in sessions.scalars().all():
+        await db.delete(session)
     runs = await db.execute(select(AgentRun).where(AgentRun.project_id == project_id))
     for run in runs.scalars().all():
         await db.delete(run)
