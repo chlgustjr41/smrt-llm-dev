@@ -5,9 +5,14 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from smrt_agent.hooks.secret_guard import is_blocked
+
 
 def write_test_file(project_path: Path, filename: str, content: str) -> str:
     """Write a test file to .smrt/tests/. filename must end with .py and contain no path separators."""
+    blocked, reason = is_blocked(project_path, filename)
+    if blocked:
+        return f"Access denied: {reason}"
     if not filename.endswith(".py"):
         raise ValueError(f"Test filename must end with .py: {filename!r}")
     if "/" in filename or "\\" in filename:

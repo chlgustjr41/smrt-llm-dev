@@ -54,8 +54,8 @@ def test_read_file_blocks_path_traversal(tmp_path):
 def test_read_file_blocks_secret_files(tmp_path):
     project = _make_project(tmp_path)
     (tmp_path / ".env").write_text("SECRET=abc")
-    with pytest.raises(PermissionError):
-        read_file(project, ".env")
+    result = read_file(project, ".env")
+    assert result.startswith("Access denied:")
 
 
 def test_fetch_url_returns_text():

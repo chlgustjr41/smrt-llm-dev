@@ -5,6 +5,8 @@ from pathlib import Path
 import pathspec
 import requests
 
+from smrt_agent.hooks.secret_guard import is_blocked
+
 _SECRET_SPEC = pathspec.PathSpec.from_lines("gitwildmatch", [
     "*.env", ".env", ".env.*", "*secret*", "*credential*",
     "*.pem", "*.key", "*password*", "*.p12", "*.pfx",
@@ -22,6 +24,10 @@ def _gitignore_spec(project_path: Path) -> pathspec.PathSpec:
 
 def list_files(project_path: Path, subdir: str = "") -> list[str]:
     """Return sorted relative paths of all non-secret, non-gitignored source files."""
+    if subdir:
+        blocked, reason = is_blocked(project_path, subdir)
+        if blocked:
+            return [f"Access denied: {reason}"]
     base = project_path / subdir if subdir else project_path
     spec = _gitignore_spec(project_path)
     result = []
@@ -40,6 +46,9 @@ def list_files(project_path: Path, subdir: str = "") -> list[str]:
 
 def read_file(project_path: Path, rel_path: str) -> str:
     """Read a project file. Blocks path traversal and secret files."""
+    blocked, reason = is_blocked(project_path, rel_path)
+    if blocked:
+        return f"Access denied: {reason}"
     if _SECRET_SPEC.match_file(rel_path):
         raise PermissionError(f"Secret file access denied: {rel_path!r}")
     target = (project_path / rel_path).resolve()
@@ -58,6 +67,9 @@ def fetch_url(url: str) -> str:
 
 def write_file(project_path: Path, rel_path: str, content: str) -> str:
     """Write a file. ONLY permitted inside .smrt/."""
+    blocked, reason = is_blocked(project_path, rel_path)
+    if blocked:
+        return f"Access denied: {reason}"
     if not rel_path.startswith(".smrt/"):
         raise PermissionError(f"write_file may only write inside .smrt/: {rel_path!r}")
     target = (project_path / rel_path).resolve()
