@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listTickets, type Ticket, type TicketStatus } from '../api/tickets'
+import { acceptPR, rejectPR } from '../api/pr'
 
 type ColumnConfig = {
   status: TicketStatus
@@ -45,7 +46,17 @@ const COLUMNS: ColumnConfig[] = [
   },
 ]
 
-function TicketCard({ ticket, col }: { ticket: Ticket; col: ColumnConfig }) {
+function TicketCard({
+  ticket,
+  col,
+  onAccept,
+  onReject,
+}: {
+  ticket: Ticket
+  col: ColumnConfig
+  onAccept?: () => void
+  onReject?: () => void
+}) {
   const [expanded, setExpanded] = useState(false)
   return (
     <div className={`border rounded overflow-hidden ${col.borderCls}`}>
@@ -58,15 +69,47 @@ function TicketCard({ ticket, col }: { ticket: Ticket; col: ColumnConfig }) {
         <span className="ml-auto text-gray-400 shrink-0">{expanded ? '▼' : '▶'}</span>
       </button>
       {expanded && (
-        <pre className="p-3 text-xs whitespace-pre-wrap text-gray-700 bg-white font-sans leading-relaxed">
-          {ticket.content}
-        </pre>
+        <div className="p-3 bg-white">
+          <pre className="text-xs whitespace-pre-wrap text-gray-700 font-sans leading-relaxed">
+            {ticket.content}
+          </pre>
+          {ticket.status === 'needs_review' && (onAccept || onReject) && (
+            <div className="flex gap-2 mt-2">
+              {onAccept && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAccept() }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors"
+                >
+                  Accept
+                </button>
+              )}
+              {onReject && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onReject() }}
+                  className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition-colors"
+                >
+                  Reject
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
 }
 
-function KanbanColumn({ col, tickets }: { col: ColumnConfig; tickets: Ticket[] }) {
+function KanbanColumn({
+  col,
+  tickets,
+  projectId,
+  onReviewed,
+}: {
+  col: ColumnConfig
+  tickets: Ticket[]
+  projectId?: number
+  onReviewed?: () => void
+}) {
   return (
     <div className={`flex flex-col rounded-xl border ${col.borderCls} overflow-hidden`}>
       <div className={`px-3 py-2 ${col.headerCls} border-b ${col.borderCls}`}>
@@ -79,7 +122,21 @@ function KanbanColumn({ col, tickets }: { col: ColumnConfig; tickets: Ticket[] }
         {tickets.length === 0 ? (
           <p className="text-xs text-gray-400 italic px-1 pt-1">None</p>
         ) : (
-          tickets.map((t) => <TicketCard key={t.id} ticket={t} col={col} />)
+          tickets.map((t) => (
+            <TicketCard
+              key={t.id}
+              ticket={t}
+              col={col}
+              onAccept={col.status === 'needs_review' && projectId ? async () => {
+                await acceptPR(projectId, t.id)
+                onReviewed?.()
+              } : undefined}
+              onReject={col.status === 'needs_review' && projectId ? async () => {
+                await rejectPR(projectId, t.id)
+                onReviewed?.()
+              } : undefined}
+            />
+          ))
         )}
       </div>
     </div>
@@ -89,9 +146,11 @@ function KanbanColumn({ col, tickets }: { col: ColumnConfig; tickets: Ticket[] }
 export function TicketsPanel({
   projectId,
   refreshKey,
+  onReviewed,
 }: {
   projectId: number
   refreshKey?: number
+  onReviewed?: () => void
 }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(true)
@@ -117,6 +176,12 @@ export function TicketsPanel({
           key={col.status}
           col={col}
           tickets={tickets.filter((t) => t.status === col.status)}
+          projectId={col.status === 'needs_review' ? projectId : undefined}
+          onReviewed={() => {
+            setLoading(true)
+            listTickets(projectId).then((data) => setTickets(data)).finally(() => setLoading(false))
+            onReviewed?.()
+          }}
         />
       ))}
     </div>

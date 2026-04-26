@@ -1,4 +1,5 @@
 """Bug tickets API: list .smrt/tickets/ files for a project."""
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -33,13 +34,31 @@ async def list_tickets(
             if line.startswith("## "):
                 resolved_ids.add(line[3:].strip())
 
+    # Read pending-prs.jsonl for needs_review tickets
+    pending_review_ids: set[str] = set()
+    pr_log = Path(project.canonical_path) / ".smrt" / "pending-prs.jsonl"
+    if pr_log.exists():
+        for line in pr_log.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entry = json.loads(line)
+                    pending_review_ids.add(entry.get("ticket_id", ""))
+                except json.JSONDecodeError:
+                    pass
+
     results = []
     for path in sorted(tickets_dir.glob("*.md")):
         content = path.read_text(encoding="utf-8")
         lines = content.splitlines()
         title = lines[0].lstrip("#").strip() if lines else path.stem
         ticket_id = path.stem
-        status = "closed" if ticket_id in resolved_ids else "pending_confirmation"
+        if ticket_id in resolved_ids:
+            status = "closed"
+        elif ticket_id in pending_review_ids:
+            status = "needs_review"
+        else:
+            status = "pending_confirmation"
         results.append({
             "id": ticket_id,
             "title": title,
