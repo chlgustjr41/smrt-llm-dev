@@ -1,5 +1,5 @@
 # todo-api
 
-A minimal FastAPI service that manages users and todo items with in-memory storage. It exposes CRUD-style endpoints for todos plus a basic stats endpoint, and appears intended as an evaluation/sandbox target rather than a production service.
+A minimal FastAPI service for managing users and todo items with simple in-memory storage. Serves as a small CRUD-style API exposing user creation, todo CRUD, completion tracking, and aggregate stats.
 
 **File:** `.smrt/Project.md`

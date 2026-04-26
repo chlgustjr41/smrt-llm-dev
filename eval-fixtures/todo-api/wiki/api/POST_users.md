@@ -1,11 +1,11 @@
 ---
 type: endpoint
 tags: []
-updated: 2026-04-25
+updated: 2026-04-26
 ---
 
 # POST /users
 
 **Authentication:** None
 
-**Purpose:** Create a user from `{email, password}`; returns `UserOut` (id, email). Stores `password_hash` server-side as the literal string `f"hashed:{password}"`.
+**Purpose:** Create a user from `{email, password}`; returns the stored user record (status 201)

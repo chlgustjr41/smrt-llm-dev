@@ -2,4 +2,4 @@
 
 **Authentication:** None
 
-**Purpose:** Returns `{completed_count, total}`.
+**Purpose:** Returns `{completed_count, total}`
