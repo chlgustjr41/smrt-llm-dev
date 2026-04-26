@@ -57,3 +57,57 @@ def record_provenance(project_path: Path, entry: dict) -> None:
     smrt_dir.mkdir(exist_ok=True)
     with open(smrt_dir / "provenance.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def append_lesson(project_path: Path, ticket_id: str, action: str, entry_text: str) -> None:
+    """Append a lesson entry to ## Lessons section of .smrt/Project.md.
+
+    Creates the file and section if either doesn't exist.
+    """
+    project_md_path = project_path / ".smrt" / "Project.md"
+    project_md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if project_md_path.exists():
+        text = project_md_path.read_text(encoding="utf-8")
+    else:
+        text = f"# Project: {project_path.name}\n"
+
+    lesson_line = f"- **{ticket_id} ({action})**: {entry_text}"
+
+    if "## Lessons" in text:
+        lines = text.splitlines()
+        out: list[str] = []
+        in_lessons = False
+        inserted = False
+        for line in lines:
+            if line.startswith("## Lessons"):
+                in_lessons = True
+                out.append(line)
+                continue
+            if in_lessons and line.startswith("## ") and not inserted:
+                out.append(lesson_line)
+                inserted = True
+                in_lessons = False
+            out.append(line)
+        if not inserted:
+            out.append(lesson_line)
+        text = "\n".join(out) + "\n"
+    else:
+        text = text.rstrip() + f"\n\n## Lessons\n\n{lesson_line}\n"
+
+    project_md_path.write_text(text, encoding="utf-8")
+
+
+def append_rejection(project_path: Path, ticket_id: str, ticket_title: str, reason: str) -> None:
+    """Append a rejection record to .smrt/rejections.jsonl."""
+    from datetime import datetime, timezone
+    smrt_dir = project_path / ".smrt"
+    smrt_dir.mkdir(exist_ok=True)
+    entry = {
+        "ticket_id": ticket_id,
+        "ticket_title": ticket_title,
+        "reason": reason,
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(smrt_dir / "rejections.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
