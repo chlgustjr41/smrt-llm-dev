@@ -1,0 +1,4 @@
+# Evaluator-only files — must not be read by any agent during evaluation.
+# Listing a file here prevents it from appearing in list_files() output
+# and causes read_file() / read_source_file() to return "Access denied".
+BUGS.md

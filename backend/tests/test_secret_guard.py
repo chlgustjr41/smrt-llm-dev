@@ -182,3 +182,42 @@ class TestAgentignoreCheck:
         (subdir / ".agentignore").write_text("*.secret\n", encoding="utf-8")
         result = check_path(tmp_path, "otherdir/data.secret")
         assert result is None, "otherdir/data.secret should NOT be blocked by subdir/.agentignore"
+
+
+class TestReviewerAgentignoreSpec:
+    """Verify that reviewer list_files honours nested .agentignore files."""
+
+    def test_root_agentignore_hides_file_from_listing(self, tmp_path):
+        from smrt_agent.agents.reviewer.tools import list_files
+        (tmp_path / ".agentignore").write_text("BUGS.md\n", encoding="utf-8")
+        (tmp_path / "BUGS.md").write_text("secret", encoding="utf-8")
+        (tmp_path / "main.py").write_text("pass", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "BUGS.md" not in files
+        assert "main.py" in files
+
+    def test_nested_agentignore_hides_file_from_listing(self, tmp_path):
+        """A .agentignore in a subdir hides files relative to that subdir."""
+        from smrt_agent.agents.reviewer.tools import list_files
+        subdir = tmp_path / "eval"
+        subdir.mkdir()
+        (subdir / ".agentignore").write_text("BUGS.md\n", encoding="utf-8")
+        (subdir / "BUGS.md").write_text("secret", encoding="utf-8")
+        (subdir / "main.py").write_text("pass", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "eval/BUGS.md" not in files
+        assert "eval/main.py" in files
+
+    def test_nested_agentignore_does_not_hide_sibling_dirs(self, tmp_path):
+        """A nested .agentignore does NOT hide matching names in sibling directories."""
+        from smrt_agent.agents.reviewer.tools import list_files
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir(); b.mkdir()
+        # Use a name that doesn't match _SECRET_SPEC so only agentignore gates it.
+        (a / ".agentignore").write_text("notes.txt\n", encoding="utf-8")
+        (a / "notes.txt").write_text("hidden", encoding="utf-8")
+        (b / "notes.txt").write_text("visible", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "a/notes.txt" not in files
+        assert "b/notes.txt" in files

@@ -1,8 +1,8 @@
 """
-todo-api — intentionally buggy FastAPI app for SMRT Agent evaluation.
+todo-api — a simple FastAPI todo application for evaluation purposes.
 
-Five logical bugs are planted here for the QA-Coder loop to discover.
-See BUGS.md (hidden from agents via .gitignore) for the answer key.
+Provides user management and todo CRUD with ownership enforcement,
+due-date support, and a completion counter for analytics.
 """
 import asyncio
 from datetime import datetime
@@ -19,7 +19,7 @@ _users: dict[int, dict] = {}
 _todos: dict[int, dict] = {}
 _user_seq = 0
 _todo_seq = 0
-_completed_count = 0  # BUG #5: unprotected shared counter
+_completed_count = 0  # tracks how many todos have been marked complete
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────────
@@ -64,15 +64,15 @@ async def create_user(body: UserCreate):
     user = {
         "id": _user_seq,
         "email": body.email,
-        "password_hash": f"hashed:{body.password}",  # never expose in responses
+        "password_hash": f"hashed:{body.password}",
     }
     _users[_user_seq] = user
-    return user  # BUG #1: password_hash exposed in response
+    return user
 
 
 @app.get("/users")
 async def list_users():
-    return list(_users.values())  # BUG #1: password_hash exposed for all users
+    return list(_users.values())
 
 
 # ─── Todos ───────────────────────────────────────────────────────────────────
@@ -82,7 +82,6 @@ async def create_todo(body: TodoCreate):
     global _todo_seq
     _todo_seq += 1
 
-    # BUG #4: due_at is accepted even if it is in the past
     todo = {
         "id": _todo_seq,
         "title": body.title,
@@ -91,7 +90,7 @@ async def create_todo(body: TodoCreate):
         "done": False,
     }
 
-    _save_todo(todo)  # BUG #2: missing `await` — write is silently dropped
+    _save_todo(todo)  # persist the new todo
     return todo
 
 
@@ -118,7 +117,7 @@ async def delete_todo(todo_id: int, caller_id: int = 0):
     if todo is None:
         raise HTTPException(status_code=404, detail="Todo not found")
 
-    # BUG #3: ownership check happens AFTER the delete
+    # Only the owner may delete their todo
     del _todos[todo_id]
 
     if todo["owner_id"] != caller_id:
@@ -135,9 +134,9 @@ async def complete_todo(todo_id: int):
         raise HTTPException(status_code=404, detail="Todo not found")
     todo["done"] = True
 
-    # BUG #5: read-then-write without a lock; lost updates under concurrency
+    # Increment the global completion counter
     current = _completed_count
-    await asyncio.sleep(0)       # yield — another request can slip in here
+    await asyncio.sleep(0)
     _completed_count = current + 1
 
     return {"todo_id": todo_id, "completed_count": _completed_count}
