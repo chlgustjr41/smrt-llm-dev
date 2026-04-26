@@ -79,6 +79,9 @@ const server = setupServer(
   http.post('http://localhost/api/projects/1/qa-sessions', () =>
     HttpResponse.json({ session_id: 'sess-xyz', status: 'pending' }, { status: 202 }),
   ),
+  http.get('http://localhost/api/projects/1/tests', () =>
+    HttpResponse.json({ version: 1, tests: [] }),
+  ),
 )
 
 beforeAll(() => server.listen())
@@ -196,5 +199,83 @@ describe('ProjectDetailPage', () => {
   it('renders the ProvenancePanel dashboard section', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('provenance-panel')).toBeInTheDocument())
+  })
+
+  it('shows Tests tab in the tab bar', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: /^tests$/i })).toBeInTheDocument())
+  })
+
+  it('shows empty state when Tests tab has no test data', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^tests$/i }))
+    await user.click(screen.getByRole('button', { name: /^tests$/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/no test history yet/i)).toBeInTheDocument(),
+    )
+  })
+
+  it('shows test rows when Tests tab has data', async () => {
+    server.use(
+      http.get('http://localhost/api/projects/1/tests', () =>
+        HttpResponse.json({
+          version: 1,
+          tests: [
+            {
+              name: 'tests/generated/test_bug_0042.py::test_password_hash_not_leaked',
+              status: 'green',
+              last_run_at: '2026-04-24T03:00:00Z',
+              promoted_to: 'per_checkup',
+              last_runs: ['pass', 'pass', 'fail', 'pass', 'pass'],
+            },
+          ],
+        }),
+      ),
+    )
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^tests$/i }))
+    await user.click(screen.getByRole('button', { name: /^tests$/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/test_password_hash_not_leaked/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByText('per_checkup')).toBeInTheDocument()
+  })
+
+  it('filters Tests tab to passing only', async () => {
+    server.use(
+      http.get('http://localhost/api/projects/1/tests', () =>
+        HttpResponse.json({
+          version: 1,
+          tests: [
+            {
+              name: 'tests/test_passing.py::test_ok',
+              status: 'green_stable',
+              last_run_at: null,
+              promoted_to: 'daily',
+              last_runs: ['pass', 'pass'],
+            },
+            {
+              name: 'tests/test_failing.py::test_bad',
+              status: 'red',
+              last_run_at: null,
+              promoted_to: null,
+              last_runs: ['fail', 'fail'],
+            },
+          ],
+        }),
+      ),
+    )
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^tests$/i }))
+    await user.click(screen.getByRole('button', { name: /^tests$/i }))
+    await waitFor(() => screen.getByText(/test_passing/i))
+    expect(screen.getByText(/test_failing/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^passing$/i }))
+    await waitFor(() => expect(screen.queryByText(/test_failing/i)).not.toBeInTheDocument())
+    expect(screen.getByText(/test_passing/i)).toBeInTheDocument()
   })
 })

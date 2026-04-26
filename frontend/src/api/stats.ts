@@ -57,3 +57,22 @@ export async function getDocScoreHistory(
   )
   return data.history
 }
+
+export interface TestStatusEntry {
+  name: string
+  status: 'green_stable' | 'green' | 'red' | 'flaky'
+  last_run_at: string | null
+  promoted_to: 'per_checkup' | 'daily' | 'weekly' | null
+  last_runs: string[]
+}
+
+export async function getTestStatus(
+  projectId: number,
+  signal?: AbortSignal,
+): Promise<TestStatusEntry[]> {
+  const data = await apiFetch<{ tests: TestStatusEntry[]; version: number }>(
+    `/projects/${projectId}/tests`,
+    { signal },
+  )
+  return data.tests
+}

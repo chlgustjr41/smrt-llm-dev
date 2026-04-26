@@ -13,6 +13,7 @@ import { CostChart } from '../components/CostChart'
 import { HeatmapChart } from '../components/HeatmapChart'
 import { DocScoreChart } from '../components/DocScoreChart'
 import { ProvenancePanel } from '../components/ProvenancePanel'
+import { getTestStatus, type TestStatusEntry } from '../api/stats'
 
 // ── Shared UI primitives ──────────────────────────────────────────────────
 
@@ -51,6 +52,168 @@ function StatusBadge({ status }: { status: string }) {
       {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
       {status}
     </span>
+  )
+}
+
+// ── Tests tab ─────────────────────────────────────────────────────────────
+
+type TestFilter = 'all' | 'passing' | 'failing'
+
+function testStatusBadgeClass(status: TestStatusEntry['status']): string {
+  const map: Record<string, string> = {
+    green_stable: 'bg-emerald-100 text-emerald-700',
+    green: 'bg-green-100 text-green-700',
+    red: 'bg-red-100 text-red-600',
+    flaky: 'bg-yellow-100 text-yellow-700',
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-500'
+}
+
+function RunDot({ result }: { result: string }) {
+  if (result === 'pass') {
+    return <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500" title="pass" />
+  }
+  if (result === 'fail') {
+    return <span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-500" title="fail" />
+  }
+  return <span className="inline-block w-2.5 h-2.5 rounded-sm bg-yellow-400" title={result} />
+}
+
+function formatRelativeTime(isoDate: string | null): string {
+  if (!isoDate) return '—'
+  const d = new Date(isoDate)
+  if (isNaN(d.getTime())) return isoDate
+  const diffMs = Date.now() - d.getTime()
+  const diffMin = Math.floor(diffMs / 60_000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h ago`
+  const diffDays = Math.floor(diffHr / 24)
+  if (diffDays < 30) return `${diffDays}d ago`
+  return d.toLocaleDateString()
+}
+
+function TestsTab({ projectId }: { projectId: number }) {
+  const [tests, setTests] = useState<TestStatusEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<TestFilter>('all')
+
+  useEffect(() => {
+    const ac = new AbortController()
+    setLoading(true)
+    setError(null)
+    getTestStatus(projectId, ac.signal)
+      .then((data) => {
+        setTests(data)
+        setLoading(false)
+      })
+      .catch((e) => {
+        if ((e as Error).name !== 'AbortError') {
+          setError(e instanceof Error ? e.message : 'Failed to load test status')
+          setLoading(false)
+        }
+      })
+    return () => ac.abort()
+  }, [projectId])
+
+  const filtered = tests.filter((t) => {
+    if (filter === 'passing') return t.status === 'green' || t.status === 'green_stable'
+    if (filter === 'failing') return t.status === 'red' || t.status === 'flaky'
+    return true
+  })
+
+  const filterBtnCls = (f: TestFilter) =>
+    `px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+      filter === f
+        ? 'bg-blue-600 text-white'
+        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+    }`
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-gray-400 py-8">
+        <span className="animate-spin text-lg">⟳</span>
+        <span>Loading test status…</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+        {error}
+      </div>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Test History"
+        action={
+          <div className="flex gap-1">
+            <button className={filterBtnCls('all')} onClick={() => setFilter('all')}>All</button>
+            <button className={filterBtnCls('passing')} onClick={() => setFilter('passing')}>Passing</button>
+            <button className={filterBtnCls('failing')} onClick={() => setFilter('failing')}>Failing / Flaky</button>
+          </div>
+        }
+      />
+      {filtered.length === 0 ? (
+        <div className="px-5 py-8 text-sm text-gray-400 text-center">
+          {tests.length === 0
+            ? 'No test history yet. Run a QA session to generate tests.'
+            : 'No tests match the current filter.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-4 py-2.5">Test</th>
+                <th className="text-left px-4 py-2.5">Status</th>
+                <th className="text-left px-4 py-2.5">Last Runs</th>
+                <th className="text-left px-4 py-2.5">Cadence</th>
+                <th className="text-left px-4 py-2.5">Last Run</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filtered.map((t) => (
+                <tr key={t.name} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-2.5 max-w-xs">
+                    <span
+                      className="font-mono text-xs text-gray-700 truncate block"
+                      title={t.name}
+                    >
+                      {t.name}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${testStatusBadgeClass(t.status)}`}>
+                      {t.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex gap-0.5 items-center">
+                      {(t.last_runs ?? []).slice(-5).map((r, i) => (
+                        <RunDot key={i} result={r} />
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">
+                    {t.promoted_to ?? '—'}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-400">
+                    {formatRelativeTime(t.last_run_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -254,7 +417,7 @@ export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const projectId = Number(id)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'config'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'config' | 'tests'>('overview')
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -356,7 +519,7 @@ export function ProjectDetailPage() {
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(['overview', 'config'] as const).map((tab) => (
+        {(['overview', 'tests', 'config'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -372,6 +535,7 @@ export function ProjectDetailPage() {
       </div>
 
       {activeTab === 'config' && <ConfigTab projectId={projectId} />}
+      {activeTab === 'tests' && <TestsTab projectId={projectId} />}
 
       {activeTab === 'overview' && <>
 
