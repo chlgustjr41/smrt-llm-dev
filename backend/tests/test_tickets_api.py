@@ -113,3 +113,74 @@ async def test_list_tickets_404_for_unknown_project():
         assert resp.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_approve_ticket_creates_session_and_starts_task(tmp_path):
+    """approve_ticket records the ticket as in-progress and returns a session_id."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    smrt = tmp_path / ".smrt" / "tickets"
+    smrt.mkdir(parents=True)
+    (smrt / "2026-04-24-001.md").write_text("# Bug\nDetails.", encoding="utf-8")
+
+    async def override_db():
+        db = AsyncMock()
+        project = MagicMock(spec=Project)
+        project.canonical_path = str(tmp_path)
+        project.id = 1
+        db.get = AsyncMock(return_value=project)
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        with patch("smrt_agent.api.tickets.asyncio.create_task") as mock_task, \
+             patch("smrt_agent.api.tickets.Settings") as MockSettings:
+            mock_task.return_value = None
+            MockSettings.return_value.anthropic_api_key = "sk-test"
+            MockSettings.return_value.model_coder = "claude-haiku-4-5-20251001"
+            MockSettings.return_value.budget_per_run_usd = 1.0
+            MockSettings.return_value.max_fix_attempts = 3
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post("/projects/1/tickets/2026-04-24-001/approve")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticket_id"] == "2026-04-24-001"
+        assert data["status"] == "in_progress"
+        assert "session_id" in data and data["session_id"] is not None
+
+        # Ticket appears in the in-progress file
+        ip_path = tmp_path / ".smrt" / "in-progress-tickets.txt"
+        assert ip_path.exists()
+        assert "2026-04-24-001" in ip_path.read_text()
+
+        mock_task.assert_called_once()
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_approve_ticket_404_for_missing_ticket(tmp_path):
+    """approve_ticket returns 404 when the ticket file does not exist."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    (tmp_path / ".smrt" / "tickets").mkdir(parents=True)
+
+    async def override_db():
+        db = AsyncMock()
+        project = MagicMock(spec=Project)
+        project.canonical_path = str(tmp_path)
+        db.get = AsyncMock(return_value=project)
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/projects/1/tickets/nonexistent-ticket/approve")
+        assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()

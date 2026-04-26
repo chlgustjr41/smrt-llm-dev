@@ -7,12 +7,19 @@ export interface Ticket {
   title: string
   content: string
   status: TicketStatus
+  session_id: string | null
+}
+
+export interface ApproveTicketResult {
+  ticket_id: string
+  session_id: string
+  status: string
 }
 
 export async function listTickets(projectId: number, signal?: AbortSignal): Promise<Ticket[]> {
   return apiFetch<Ticket[]>(`/projects/${projectId}/tickets`, { signal })
 }
 
-export async function approveTicket(projectId: number, ticketId: string): Promise<void> {
-  await apiFetch(`/projects/${projectId}/tickets/${ticketId}/approve`, { method: 'POST' })
+export async function approveTicket(projectId: number, ticketId: string): Promise<ApproveTicketResult> {
+  return apiFetch<ApproveTicketResult>(`/projects/${projectId}/tickets/${ticketId}/approve`, { method: 'POST' })
 }

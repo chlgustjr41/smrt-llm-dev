@@ -46,7 +46,7 @@ const COLUMNS: ColumnConfig[] = [
   {
     status: 'qa_review',
     label: 'QA Review',
-    icon: '🔄',
+    icon: '🔬',
     headerCls: 'bg-violet-50',
     borderCls: 'border-violet-200',
     cardBg: 'bg-white hover:bg-violet-50',
@@ -78,21 +78,58 @@ const COLUMNS: ColumnConfig[] = [
   },
 ]
 
+// ── Expandable session events pane ────────────────────────────────────────
+
+function SessionEventsPane({
+  projectId,
+  sessionId,
+}: {
+  projectId: number
+  sessionId: string
+}) {
+  const [events, setEvents] = useState<AgentEvent[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const ac = new AbortController()
+    getQASessionEvents(projectId, sessionId, ac.signal)
+      .then(setEvents)
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.name !== 'AbortError') setError(e.message)
+      })
+    return () => ac.abort()
+  }, [projectId, sessionId])
+
+  if (error) return <p className="text-xs text-red-500 px-3 py-2">{error}</p>
+  if (!events) return <p className="text-xs text-gray-400 px-3 py-2 animate-pulse">Loading events…</p>
+  if (events.length === 0) return <p className="text-xs text-gray-400 italic px-3 py-2">No events recorded yet.</p>
+
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 px-3 py-3 max-h-72 overflow-y-auto">
+      <AgentTimeline events={events} showThoughts />
+    </div>
+  )
+}
+
 // ── Ticket detail dialog ──────────────────────────────────────────────────
 
 function TicketDialog({
   ticket,
   col,
+  projectId,
   onClose,
   onAccept,
   onReject,
 }: {
   ticket: Ticket
   col: ColumnConfig
+  projectId: number
   onClose: () => void
   onAccept?: () => void
   onReject?: () => void
 }) {
+  const [showEvents, setShowEvents] = useState(false)
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -105,9 +142,10 @@ function TicketDialog({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Header */}
         <div className={`flex items-start justify-between px-5 py-4 border-b ${col.borderCls} ${col.headerCls}`}>
           <div className="space-y-0.5">
             <span className={`inline-block font-mono text-xs px-2 py-0.5 rounded-full ${col.accentCls}`}>
@@ -119,20 +157,39 @@ function TicketDialog({
               <span>{col.label}</span>
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none mt-0.5 shrink-0"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-2 shrink-0 mt-0.5">
+            {ticket.session_id && (
+              <button
+                onClick={() => setShowEvents((x) => !x)}
+                className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors"
+              >
+                {showEvents ? '▲ Hide log' : '▼ Agent log'}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none"
+            >
+              ×
+            </button>
+          </div>
         </div>
 
+        {/* Agent log pane (collapsible) */}
+        {showEvents && ticket.session_id && (
+          <div className="border-b border-gray-100 max-h-60 overflow-y-auto bg-gray-50 px-5 py-3">
+            <SessionEventsPane projectId={projectId} sessionId={ticket.session_id} />
+          </div>
+        )}
+
+        {/* Ticket content */}
         <div className="flex-1 overflow-y-auto p-5">
           <div className="prose prose-sm max-w-none text-gray-700 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:bg-gray-50 [&_pre]:border [&_pre]:border-gray-200 [&_pre]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs">
             <Markdown>{ticket.content}</Markdown>
           </div>
         </div>
 
+        {/* Accept / Reject actions */}
         {ticket.status === 'needs_review' && (onAccept || onReject) && (
           <div className="flex items-center gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50">
             <span className="text-xs text-gray-500 flex-1">Accept to merge the fix or reject to requeue it.</span>
@@ -164,39 +221,73 @@ function TicketDialog({
 function TicketCard({
   ticket,
   col,
+  projectId,
   draggable,
   onClick,
 }: {
   ticket: Ticket
   col: ColumnConfig
+  projectId: number
   draggable?: boolean
   onClick: () => void
 }) {
+  const [showLogs, setShowLogs] = useState(false)
+
   function onDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('ticketId', ticket.id)
     e.dataTransfer.effectAllowed = 'move'
   }
 
+  const hasSession = Boolean(ticket.session_id)
+  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
+
   return (
-    <div
-      draggable={draggable}
-      onDragStart={draggable ? onDragStart : undefined}
-      onClick={onClick}
-      className={`
-        rounded-lg border ${col.borderCls} ${col.cardBg}
-        px-3 py-2.5 cursor-pointer select-none transition-colors
-        ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
-        shadow-sm hover:shadow-md
-      `}
-    >
-      <div className="flex items-start gap-2">
-        <span className={`font-mono text-[11px] shrink-0 mt-0.5 px-1.5 py-0.5 rounded ${col.accentCls}`}>
-          {ticket.id}
-        </span>
-        <span className="text-sm text-gray-800 leading-snug line-clamp-2">{ticket.title}</span>
+    <div className="rounded-lg border overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+      {/* Card body */}
+      <div
+        draggable={draggable}
+        onDragStart={draggable ? onDragStart : undefined}
+        onClick={onClick}
+        className={`
+          ${col.borderCls} ${col.cardBg}
+          px-3 py-2.5 cursor-pointer select-none transition-colors
+          ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
+        `}
+      >
+        <div className="flex items-start gap-2">
+          <span className={`font-mono text-[11px] shrink-0 mt-0.5 px-1.5 py-0.5 rounded ${col.accentCls}`}>
+            {ticket.id}
+          </span>
+          <span className="text-sm text-gray-800 leading-snug line-clamp-2 flex-1">{ticket.title}</span>
+        </div>
+        {draggable && (
+          <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to start Coder fix</p>
+        )}
       </div>
-      {draggable && (
-        <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to approve</p>
+
+      {/* Agent log toggle — shown when ticket has a session and is active/done */}
+      {hasSession && (
+        <div className={`border-t ${col.borderCls} px-2 py-1 flex items-center gap-2 ${col.headerCls}`}>
+          {isActive && (
+            <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse shrink-0 opacity-60" style={{ color: 'currentColor' }} />
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowLogs((x) => !x) }}
+            className={`text-[11px] font-medium flex-1 text-left ${col.textCls} hover:underline`}
+          >
+            {showLogs
+              ? '▲ Hide agent log'
+              : isActive
+                ? `▼ ${ticket.status === 'qa_review' ? 'QA checking…' : 'Coder fixing…'} view log`
+                : '▼ View agent log'
+            }
+          </button>
+        </div>
+      )}
+
+      {/* Inline log pane */}
+      {showLogs && ticket.session_id && (
+        <SessionEventsPane projectId={projectId} sessionId={ticket.session_id} />
       )}
     </div>
   )
@@ -207,11 +298,13 @@ function TicketCard({
 function KanbanColumn({
   col,
   tickets,
+  projectId,
   onDrop,
   onTicketClick,
 }: {
   col: ColumnConfig
   tickets: Ticket[]
+  projectId: number
   onDrop?: (ticketId: string) => void
   onTicketClick: (ticket: Ticket) => void
 }) {
@@ -256,7 +349,7 @@ function KanbanColumn({
             dragOver ? 'border-blue-400' : 'border-gray-200'
           }`}>
             <p className="text-xs text-gray-400 italic text-center px-2">
-              Drop tickets here<br />to approve for Coder
+              Drop tickets here<br />to start Coder fix
             </p>
           </div>
         )}
@@ -265,6 +358,7 @@ function KanbanColumn({
             key={t.id}
             ticket={t}
             col={col}
+            projectId={projectId}
             draggable={col.status === 'pending_confirmation'}
             onClick={() => onTicketClick(t)}
           />
@@ -303,7 +397,7 @@ function ResizeHandle({
     const startX = e.clientX
     const startWidths = [...colWidths]
     const totalFr = startWidths.reduce((a, b) => a + b, 0)
-    const totalWidth = boardRef.current?.offsetWidth ?? 800
+    const totalWidth = boardRef.current?.offsetWidth ?? 900
 
     function onPointerMove(ev: PointerEvent) {
       const deltaFr = ((ev.clientX - startX) / totalWidth) * totalFr
@@ -339,64 +433,16 @@ function ResizeHandle({
   )
 }
 
-// ── Expandable session events pane ────────────────────────────────────────
+// ── Loop status banner ────────────────────────────────────────────────────
 
-function SessionEventsPane({
-  projectId,
-  sessionId,
-}: {
-  projectId: number
-  sessionId: string
-}) {
-  const [events, setEvents] = useState<AgentEvent[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const ac = new AbortController()
-    getQASessionEvents(projectId, sessionId, ac.signal)
-      .then(setEvents)
-      .catch((e: unknown) => {
-        if (e instanceof Error && e.name !== 'AbortError') setError(e.message)
-      })
-    return () => ac.abort()
-  }, [projectId, sessionId])
-
-  if (error) return (
-    <p className="text-xs text-red-500 px-3 py-2">{error}</p>
-  )
-  if (!events) return (
-    <p className="text-xs text-gray-400 px-3 py-2 animate-pulse">Loading session events…</p>
-  )
-  if (events.length === 0) return (
-    <p className="text-xs text-gray-400 italic px-3 py-2">No events recorded yet.</p>
-  )
-
-  return (
-    <div className="border-t border-gray-100 bg-gray-50 px-3 py-3 max-h-80 overflow-y-auto">
-      <AgentTimeline events={events} showThoughts />
-    </div>
-  )
-}
-
-// ── Agent loop status banners ─────────────────────────────────────────────
-
-function AgentLoopStatusBanners({
-  projectId,
-  inProgressCount,
-}: {
-  projectId: number
-  inProgressCount: number
-}) {
+function LoopStatusBanner({ projectId }: { projectId: number }) {
   const [status, setStatus] = useState<CoderStatus | null>(null)
-  const [qaExpanded, setQaExpanded] = useState(false)
-  const [coderExpanded, setCoderExpanded] = useState(false)
 
   const fetchStatus = useCallback(async (signal?: AbortSignal) => {
     try {
-      const s = await getCoderStatus(projectId, signal)
-      setStatus(s)
+      setStatus(await getCoderStatus(projectId, signal))
     } catch {
-      // silently ignore — banners just won't update
+      // silently ignore — banner just won't update
     }
   }, [projectId])
 
@@ -407,99 +453,35 @@ function AgentLoopStatusBanners({
     return () => { ac.abort(); clearInterval(interval) }
   }, [fetchStatus])
 
-  if (!status) return null
+  if (!status || status.idle) return null
 
-  const isQaRunning = status.status === 'qa_running'
   const isCoderRunning = status.status === 'coder_running'
-  const isActive = !status.idle
+  const isQaChecking = status.status === 'qa_checking'
 
-  if (status.idle) {
-    return (
-      <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
-        <span className="text-gray-400 text-base">⚙️</span>
-        <span className="font-medium text-gray-500">QA-Coder Loop</span>
-        <span className="text-gray-400">—</span>
-        <span className="text-gray-500">Idle</span>
-        {inProgressCount > 0 && (
-          <span className="ml-auto text-xs text-blue-600 font-medium">
-            {inProgressCount} ticket{inProgressCount !== 1 ? 's' : ''} queued — start a QA session to begin
-          </span>
-        )}
-      </div>
-    )
-  }
+  const color = isCoderRunning
+    ? { border: 'border-amber-200', bg: 'bg-amber-50', dot: 'bg-amber-500', text: 'text-amber-800', badge: 'bg-amber-100 text-amber-700' }
+    : isQaChecking
+      ? { border: 'border-violet-200', bg: 'bg-violet-50', dot: 'bg-violet-500', text: 'text-violet-800', badge: 'bg-violet-100 text-violet-700' }
+      : { border: 'border-gray-200', bg: 'bg-gray-50', dot: 'bg-gray-400', text: 'text-gray-600', badge: 'bg-gray-100 text-gray-600' }
+
+  const label = isCoderRunning
+    ? 'Coder Agent — fixing bug'
+    : isQaChecking
+      ? 'QA Agent — verifying fix'
+      : `Running (${status.status})`
 
   return (
-    <div className="space-y-2">
-      {/* QA Agent row */}
-      <div className={`rounded-lg border overflow-hidden ${isQaRunning ? 'border-violet-200' : 'border-gray-200'}`}>
-        <div className={`flex items-center gap-3 px-4 py-2.5 text-sm ${isQaRunning ? 'bg-violet-50' : 'bg-gray-50'}`}>
-          {isQaRunning
-            ? <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse shrink-0" />
-            : <span className="w-2 h-2 rounded-full bg-gray-300 shrink-0" />
-          }
-          <span className={`font-medium ${isQaRunning ? 'text-violet-800' : 'text-gray-500'}`}>QA Agent</span>
-          <span className={isQaRunning ? 'text-violet-600' : 'text-gray-400'}>—</span>
-          <span className={isQaRunning ? 'text-violet-700' : 'text-gray-400'}>
-            {isQaRunning ? 'Running tests' : 'Waiting'}
-          </span>
-          {status.ticket_id && isQaRunning && (
-            <span className="font-mono text-xs bg-violet-100 text-violet-800 px-2 py-0.5 rounded-full">
-              {status.ticket_id}
-            </span>
-          )}
-          {isActive && status.session_id && (
-            <button
-              onClick={() => setQaExpanded((x) => !x)}
-              className={`ml-auto text-xs px-2 py-0.5 rounded transition-colors ${
-                isQaRunning
-                  ? 'text-violet-600 hover:bg-violet-100'
-                  : 'text-gray-400 hover:bg-gray-200'
-              }`}
-            >
-              {qaExpanded ? '▲ Hide' : '▼ Thoughts'}
-            </button>
-          )}
-        </div>
-        {qaExpanded && status.session_id && (
-          <SessionEventsPane projectId={projectId} sessionId={status.session_id} />
-        )}
-      </div>
-
-      {/* Coder Agent row */}
-      <div className={`rounded-lg border overflow-hidden ${isCoderRunning ? 'border-amber-200' : 'border-gray-200'}`}>
-        <div className={`flex items-center gap-3 px-4 py-2.5 text-sm ${isCoderRunning ? 'bg-amber-50' : 'bg-gray-50'}`}>
-          {isCoderRunning
-            ? <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
-            : <span className="w-2 h-2 rounded-full bg-gray-300 shrink-0" />
-          }
-          <span className={`font-medium ${isCoderRunning ? 'text-amber-800' : 'text-gray-500'}`}>Coder Agent</span>
-          <span className={isCoderRunning ? 'text-amber-600' : 'text-gray-400'}>—</span>
-          <span className={isCoderRunning ? 'text-amber-700' : 'text-gray-400'}>
-            {isCoderRunning ? 'Coding fix' : 'Waiting'}
-          </span>
-          {status.ticket_id && isCoderRunning && (
-            <span className="font-mono text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
-              {status.ticket_id}
-            </span>
-          )}
-          {isActive && status.session_id && (
-            <button
-              onClick={() => setCoderExpanded((x) => !x)}
-              className={`ml-auto text-xs px-2 py-0.5 rounded transition-colors ${
-                isCoderRunning
-                  ? 'text-amber-600 hover:bg-amber-100'
-                  : 'text-gray-400 hover:bg-gray-200'
-              }`}
-            >
-              {coderExpanded ? '▲ Hide' : '▼ Thoughts'}
-            </button>
-          )}
-        </div>
-        {coderExpanded && status.session_id && (
-          <SessionEventsPane projectId={projectId} sessionId={status.session_id} />
-        )}
-      </div>
+    <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border ${color.border} ${color.bg} text-sm`}>
+      <span className={`w-2 h-2 rounded-full ${color.dot} animate-pulse shrink-0`} />
+      <span className={`font-medium ${color.text}`}>{label}</span>
+      {status.ticket_id && (
+        <span className={`font-mono text-xs px-2 py-0.5 rounded-full ${color.badge}`}>
+          {status.ticket_id}
+        </span>
+      )}
+      <span className={`text-xs ${color.text} opacity-70 ml-auto`}>
+        {isCoderRunning ? 'Editing source files…' : 'Running test suite…'}
+      </span>
     </div>
   )
 }
@@ -521,50 +503,70 @@ export function TicketsPanel({
   const [colWidths, setColWidths] = useState([1, 1, 1, 1, 1])
   const boardRef = useRef<HTMLDivElement>(null)
 
-  function refresh() {
-    setLoading(true)
-    listTickets(projectId)
-      .then(setTickets)
-      .catch(() => setTickets([]))
-      .finally(() => setLoading(false))
-  }
+  const fetchTickets = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const data = await listTickets(projectId, signal)
+      if (!signal?.aborted) setTickets(data)
+    } catch {
+      if (!signal?.aborted) setTickets([])
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  }, [projectId])
 
+  // Initial load + refresh on refreshKey change
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
-    listTickets(projectId, controller.signal)
-      .then((data) => { if (!controller.signal.aborted) setTickets(data) })
-      .catch(() => { if (!controller.signal.aborted) setTickets([]) })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    fetchTickets(controller.signal)
     return () => controller.abort()
-  }, [projectId, refreshKey])
+  }, [projectId, refreshKey, fetchTickets])
+
+  // Poll every 8s while any ticket has an active session (coder/QA running)
+  useEffect(() => {
+    const hasActiveSession = tickets.some(
+      (t) => t.session_id && (t.status === 'in_progress' || t.status === 'qa_review'),
+    )
+    if (!hasActiveSession) return
+    const interval = setInterval(() => fetchTickets(), 8000)
+    return () => clearInterval(interval)
+  }, [tickets, fetchTickets])
 
   async function handleDrop(ticketId: string) {
     const ticket = tickets.find((t) => t.id === ticketId)
     if (!ticket || ticket.status !== 'pending_confirmation') return
+
+    // Optimistically move to in_progress
     setTickets((prev) =>
       prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)),
     )
     try {
-      await approveTicket(projectId, ticketId)
+      const result = await approveTicket(projectId, ticketId)
+      // Update the ticket with the real session_id returned from approve
+      setTickets((prev) =>
+        prev.map((t) =>
+          t.id === ticketId
+            ? { ...t, status: 'in_progress', session_id: result.session_id }
+            : t,
+        ),
+      )
     } catch {
-      refresh()
+      await fetchTickets()
     }
   }
 
   async function handleAccept(ticket: Ticket) {
     await acceptPR(projectId, ticket.id)
-    refresh()
+    await fetchTickets()
     onReviewed?.()
   }
 
   async function handleReject(ticket: Ticket) {
     await rejectPR(projectId, ticket.id)
-    refresh()
+    await fetchTickets()
     onReviewed?.()
   }
 
-  const inProgressCount = tickets.filter((t) => t.status === 'in_progress').length
   const selectedCol = selectedTicket
     ? (COLUMNS.find((c) => c.status === selectedTicket.status) ?? COLUMNS[0])
     : null
@@ -576,8 +578,8 @@ export function TicketsPanel({
 
   return (
     <div className="space-y-3">
-      {/* Agent loop status (QA + Coder) */}
-      <AgentLoopStatusBanners projectId={projectId} inProgressCount={inProgressCount} />
+      {/* Active agent status banner */}
+      <LoopStatusBanner projectId={projectId} />
 
       {/* Kanban board — CSS grid, fr units resolve against the board container */}
       <div className="overflow-x-auto">
@@ -588,7 +590,7 @@ export function TicketsPanel({
             gridTemplateColumns: colWidths
               .map((w, i) => (i < colWidths.length - 1 ? `${w}fr 8px` : `${w}fr`))
               .join(' '),
-            minWidth: '700px',
+            minWidth: '800px',
             width: '100%',
           }}
         >
@@ -597,6 +599,7 @@ export function TicketsPanel({
               key={col.status}
               col={col}
               tickets={tickets.filter((t) => t.status === col.status)}
+              projectId={projectId}
               onDrop={col.acceptsDrop ? handleDrop : undefined}
               onTicketClick={setSelectedTicket}
             />,
@@ -620,6 +623,7 @@ export function TicketsPanel({
         <TicketDialog
           ticket={selectedTicket}
           col={selectedCol}
+          projectId={projectId}
           onClose={() => setSelectedTicket(null)}
           onAccept={
             selectedTicket.status === 'needs_review'

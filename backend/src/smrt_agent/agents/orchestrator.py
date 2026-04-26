@@ -1,6 +1,7 @@
 """QA session orchestrator: coordinates QA → HITL → Coder → recheck loop."""
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -163,4 +164,107 @@ async def run_qa_session(
 
         prior_fix_context = f"Fix attempt {attempt + 1} recheck:\n{recheck_output}"
 
+    return "error"
+
+
+async def run_ticket_fix_session(
+    *,
+    session_id: str,
+    ticket_id: str,
+    project_path: Path,
+    api_key: str,
+    model_coder: str,
+    budget_usd: float,
+    max_fix_attempts: int,
+    queue: asyncio.Queue,
+    on_status_change: Callable[[str], Awaitable[None]] | None = None,
+) -> str:
+    """Run Coder → pytest-verify loop for a specific approved ticket.
+
+    Status transitions emitted to queue and via on_status_change callback:
+      coder_running  → Coder agent is editing source files
+      qa_checking    → Pytest recheck is running (QA verify)
+      done           → Tests green; PR entry recorded in pending-prs.jsonl
+      error          → Max attempts exhausted
+    """
+    per_agent_budget = budget_usd / max(max_fix_attempts * 2, 1)
+
+    ticket_path = project_path / ".smrt" / "tickets" / f"{ticket_id}.md"
+    ticket_content = (
+        ticket_path.read_text(encoding="utf-8")
+        if ticket_path.exists()
+        else f"Ticket {ticket_id}: content not found"
+    )
+
+    for attempt in range(max_fix_attempts):
+        # ── Coder phase ──────────────────────────────────────────────────────
+        if on_status_change:
+            await on_status_change("coder_running")
+        await queue.put({
+            "type": "session_status",
+            "status": "coder_running",
+            "ticket_id": ticket_id,
+            "fix_attempt": attempt,
+            "ts": _ts(),
+        })
+
+        pytest_output = run_pytest(project_path)
+        await run_coder_agent(
+            project_path=project_path,
+            api_key=api_key,
+            model=model_coder,
+            budget_usd=per_agent_budget,
+            queue=queue,
+            ticket_content=ticket_content,
+            pytest_output=pytest_output,
+        )
+
+        # ── QA verification phase ─────────────────────────────────────────
+        if on_status_change:
+            await on_status_change("qa_checking")
+        await queue.put({
+            "type": "session_status",
+            "status": "qa_checking",
+            "ticket_id": ticket_id,
+            "fix_attempt": attempt,
+            "ts": _ts(),
+        })
+
+        recheck_output = run_pytest(project_path)
+        await queue.put({
+            "type": "recheck_output",
+            "output": recheck_output[:2000],
+            "ts": _ts(),
+        })
+
+        if "passed" in recheck_output and "failed" not in recheck_output:
+            _record_pending_pr(project_path, ticket_id, session_id, recheck_output)
+            await queue.put({
+                "type": "pr_ready",
+                "ticket_id": ticket_id,
+                "session_id": session_id,
+                "ts": _ts(),
+            })
+            await queue.put({
+                "type": "session_status",
+                "status": "done",
+                "fix_attempt": attempt,
+                "ts": _ts(),
+            })
+            return "done"
+
+        await queue.put({
+            "type": "fix_attempt_failed",
+            "attempt": attempt + 1,
+            "max_attempts": max_fix_attempts,
+            "recheck": recheck_output[:500],
+            "ts": _ts(),
+        })
+
+    await queue.put({
+        "type": "session_status",
+        "status": "error",
+        "message": f"Max fix attempts ({max_fix_attempts}) reached without green tests",
+        "ts": _ts(),
+    })
     return "error"
