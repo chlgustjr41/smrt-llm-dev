@@ -1,10 +1,30 @@
+from pathlib import Path
+
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+
+def _find_env_file() -> Path | None:
+    """Walk up from this file's location to find the nearest .env file.
+
+    When running locally the source tree sits inside the repo root which has .env.
+    When running inside Docker the source is at /app/src/... with no .env nearby,
+    so this returns None and dotenv_settings contributes nothing — Docker's env_file:
+    injection (which lands as ordinary OS env vars) takes over instead.
+    """
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / ".env"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+_ENV_FILE = _find_env_file()
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE else None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -36,6 +56,20 @@ class Settings(BaseSettings):
 
     # Observability
     log_level: str = Field(default="INFO", alias="smrt_log_level")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Dotenv file beats OS environment variables so that ANTHROPIC_API_KEY
+        # in the project's .env is always used, even if the host shell has a
+        # different key exported (e.g. from another project).
+        return (init_settings, dotenv_settings, env_settings, file_secret_settings)
 
     @property
     def allowed_project_roots(self) -> list[str]:
