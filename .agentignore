@@ -1,0 +1,27 @@
+# .agentignore — files the SMRT agent may NOT read or write.
+# This is NOT .gitignore. Only list actual secrets and credentials here.
+# Directories like .smrt/ are intentionally NOT listed — agents need access to them.
+
+# Environment / secrets
+.env
+.env.*
+.env_*
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.pfx
+*.ppk
+
+# Cloud credentials
+credentials.json
+service-account*.json
+gcloud-key*.json
+.netrc
+.npmrc
+.pypirc
+secrets.yaml
+secrets.yml
+secret.yaml
+secret.yml

@@ -198,13 +198,11 @@ function TicketCard({
 function KanbanColumn({
   col,
   tickets,
-  width,
   onDrop,
   onTicketClick,
 }: {
   col: ColumnConfig
   tickets: Ticket[]
-  width: number
   onDrop?: (ticketId: string) => void
   onTicketClick: (ticket: Ticket) => void
 }) {
@@ -227,10 +225,7 @@ function KanbanColumn({
   }
 
   return (
-    <div
-      className="flex flex-col rounded-xl border overflow-hidden"
-      style={{ width: `${width}%`, minWidth: '12%', flexShrink: 0 }}
-    >
+    <div className="flex flex-col rounded-xl border overflow-hidden min-w-0">
       {/* Column header */}
       <div className={`px-3 py-2.5 ${col.headerCls} border-b ${col.borderCls} flex items-center gap-2`}>
         <span className="text-sm">{col.icon}</span>
@@ -301,17 +296,17 @@ function ResizeHandle({
 
     const startX = e.clientX
     const startWidths = [...colWidths]
+    const totalFr = startWidths.reduce((a, b) => a + b, 0)
     const totalWidth = boardRef.current?.offsetWidth ?? 800
 
     function onPointerMove(ev: PointerEvent) {
-      const deltaX = ev.clientX - startX
-      const deltaPct = (deltaX / totalWidth) * 100
+      const deltaFr = ((ev.clientX - startX) / totalWidth) * totalFr
       const newWidths = [...startWidths]
-      newWidths[colIndex] = Math.max(10, startWidths[colIndex] + deltaPct)
-      newWidths[colIndex + 1] = Math.max(10, startWidths[colIndex + 1] - deltaPct)
-      // Re-normalise so they always sum to 100
-      const total = newWidths.reduce((a, b) => a + b, 0)
-      onWidthChange(newWidths.map((w) => (w / total) * 100))
+      newWidths[colIndex] = Math.max(0.15, startWidths[colIndex] + deltaFr)
+      newWidths[colIndex + 1] = Math.max(0.15, startWidths[colIndex + 1] - deltaFr)
+      // Normalise so they always sum to totalFr
+      const newTotal = newWidths.reduce((a, b) => a + b, 0)
+      onWidthChange(newWidths.map((w) => (w / newTotal) * totalFr))
     }
 
     function onPointerUp() {
@@ -421,7 +416,7 @@ export function TicketsPanel({
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
-  const [colWidths, setColWidths] = useState([25, 25, 25, 25])
+  const [colWidths, setColWidths] = useState([1, 1, 1, 1])
   const boardRef = useRef<HTMLDivElement>(null)
 
   function refresh() {
@@ -484,32 +479,39 @@ export function TicketsPanel({
       {/* Coder status banner */}
       <CoderStatusBanner projectId={projectId} inProgressCount={inProgressCount} />
 
-      {/* Kanban board — horizontally scrollable so columns always have room */}
+      {/* Kanban board — CSS grid so fr units resolve against the board container */}
       <div className="overflow-x-auto">
         <div
           ref={boardRef}
-          className="flex gap-0 min-w-[600px]"
-          style={{ width: '100%' }}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: colWidths
+              .map((w, i) => (i < colWidths.length - 1 ? `${w}fr 8px` : `${w}fr`))
+              .join(' '),
+            minWidth: '600px',
+            width: '100%',
+          }}
         >
-          {COLUMNS.map((col, i) => (
-            <div key={col.status} className="flex items-stretch">
-              <KanbanColumn
-                col={col}
-                tickets={tickets.filter((t) => t.status === col.status)}
-                width={colWidths[i]}
-                onDrop={col.acceptsDrop ? handleDrop : undefined}
-                onTicketClick={setSelectedTicket}
-              />
-              {i < COLUMNS.length - 1 && (
-                <ResizeHandle
-                  colIndex={i}
-                  boardRef={boardRef}
-                  colWidths={colWidths}
-                  onWidthChange={setColWidths}
-                />
-              )}
-            </div>
-          ))}
+          {COLUMNS.flatMap((col, i) => [
+            <KanbanColumn
+              key={col.status}
+              col={col}
+              tickets={tickets.filter((t) => t.status === col.status)}
+              onDrop={col.acceptsDrop ? handleDrop : undefined}
+              onTicketClick={setSelectedTicket}
+            />,
+            ...(i < COLUMNS.length - 1
+              ? [
+                  <ResizeHandle
+                    key={`handle-${i}`}
+                    colIndex={i}
+                    boardRef={boardRef}
+                    colWidths={colWidths}
+                    onWidthChange={setColWidths}
+                  />,
+                ]
+              : []),
+          ])}
         </div>
       </div>
 

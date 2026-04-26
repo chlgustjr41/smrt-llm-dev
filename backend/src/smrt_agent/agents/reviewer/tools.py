@@ -12,24 +12,24 @@ _SECRET_SPEC = pathspec.PathSpec.from_lines("gitwildmatch", [
     "*.pem", "*.key", "*password*", "*.p12", "*.pfx",
 ])
 
-_SKIP_DIRS = {".git", ".smrt", "__pycache__", "node_modules", ".venv", "venv"}
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
-def _gitignore_spec(project_path: Path) -> pathspec.PathSpec:
-    gi = project_path / ".gitignore"
-    if gi.exists():
-        return pathspec.PathSpec.from_lines("gitwildmatch", gi.read_text().splitlines())
+def _agentignore_spec(project_path: Path) -> pathspec.PathSpec:
+    ai = project_path / ".agentignore"
+    if ai.exists():
+        return pathspec.PathSpec.from_lines("gitwildmatch", ai.read_text().splitlines())
     return pathspec.PathSpec.from_lines("gitwildmatch", [])
 
 
 def list_files(project_path: Path, subdir: str = "") -> list[str]:
-    """Return sorted relative paths of all non-secret, non-gitignored source files."""
+    """Return sorted relative paths of all non-secret, non-agentignored source files."""
     if subdir:
         blocked, reason = is_blocked(project_path, subdir)
         if blocked:
             return [f"Access denied: {reason}"]
     base = project_path / subdir if subdir else project_path
-    spec = _gitignore_spec(project_path)
+    spec = _agentignore_spec(project_path)
     result = []
     for root, dirs, files in os.walk(base):
         dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
