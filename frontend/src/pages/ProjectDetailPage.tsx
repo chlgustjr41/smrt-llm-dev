@@ -554,13 +554,19 @@ export function ProjectDetailPage() {
   const [ticketsRefreshKey, setTicketsRefreshKey] = useState(0)
 
   useEffect(() => {
-    Promise.all([getProject(projectId), listRuns(projectId)])
+    const controller = new AbortController()
+    Promise.all([getProject(projectId), listRuns(projectId, controller.signal)])
       .then(([proj, runs]) => {
+        if (controller.signal.aborted) return
         setProject(proj)
         setPastRuns(runs)
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
-      .finally(() => setLoading(false))
+      .catch((e) => {
+        if (controller.signal.aborted) return
+        setError(e instanceof Error ? e.message : 'Failed to load')
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
   }, [projectId])
 
   async function handleRunAudit() {
@@ -592,6 +598,8 @@ export function ProjectDetailPage() {
   function handleRunComplete(status: string) {
     if (!runId) return
     setPastRuns((prev) => prev.map((r) => (r.run_id === runId ? { ...r, status } : r)))
+    // Re-fetch from DB to get accurate token counts for the completed run
+    listRuns(projectId).then(setPastRuns).catch(() => {})
   }
 
   function handleQAComplete(status: string) {

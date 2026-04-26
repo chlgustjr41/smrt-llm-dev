@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getRunEvents } from '../api/runs'
 import { AgentTimeline, type AgentEvent } from './AgentTimeline'
 
 export function LiveAgentView({
@@ -18,9 +19,32 @@ export function LiveAgentView({
   onCompleteRef.current = onComplete
 
   useEffect(() => {
+    let cancelled = false
+
+    async function loadFromLog() {
+      try {
+        const logged = await getRunEvents(projectId, runId)
+        if (!cancelled && logged.length > 0) {
+          setEvents(logged)
+          const doneEvent = logged.find((e) => e.type === 'done')
+          if (doneEvent) {
+            setSummary(
+              `Audit complete — ${doneEvent.total_input_tokens?.toLocaleString()} in / ` +
+                `${doneEvent.total_output_tokens?.toLocaleString()} out tokens` +
+                (doneEvent.cost_usd !== undefined ? ` ($${doneEvent.cost_usd.toFixed(4)})` : ''),
+            )
+          }
+        }
+      } catch {
+        // silently ignore — empty events list is fine
+      }
+      if (!cancelled) setDone(true)
+    }
+
     const es = new EventSource(`/api/projects/${projectId}/runs/${runId}/stream`)
 
     es.onmessage = (e) => {
+      if (cancelled) return
       const event = JSON.parse(e.data) as AgentEvent
       setEvents((prev) => [...prev, event])
 
@@ -46,11 +70,17 @@ export function LiveAgentView({
     }
 
     es.onerror = () => {
-      setDone(true)
       es.close()
+      if (cancelled) return
+      // Stream unavailable (run already completed or server restarted).
+      // Fall back to the persisted event log so the timeline is still shown.
+      loadFromLog()
     }
 
-    return () => es.close()
+    return () => {
+      cancelled = true
+      es.close()
+    }
   }, [projectId, runId])
 
   return (

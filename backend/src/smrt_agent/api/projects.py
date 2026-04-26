@@ -14,9 +14,9 @@ from smrt_agent.platform_paths import canonicalize
 from smrt_agent.settings import Settings
 
 CONFIG_DEFAULTS = {
-    "reviewer_model": "claude-opus-4-7",
-    "qa_model": "claude-sonnet-4-6",
-    "coder_model": "claude-sonnet-4-6",
+    "reviewer_model": "claude-haiku-4-5-20251001",
+    "qa_model": "claude-haiku-4-5-20251001",
+    "coder_model": "claude-haiku-4-5-20251001",
     "max_fix_attempts": 5,
     "max_questions_per_attempt": 1,
     "scheduler_cadence": "daily_0300",

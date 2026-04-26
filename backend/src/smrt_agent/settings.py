@@ -22,10 +22,10 @@ class Settings(BaseSettings):
     budget_per_run_usd: float = Field(default=1.50, alias="smrt_budget_per_run_usd")
     budget_per_day_usd: float = Field(default=10.00, alias="smrt_budget_per_day_usd")
 
-    # Models
-    model_reviewer: str = Field(default="claude-opus-4-7", alias="smrt_model_reviewer")
-    model_qa: str = Field(default="claude-sonnet-4-6", alias="smrt_model_qa")
-    model_coder: str = Field(default="claude-sonnet-4-6", alias="smrt_model_coder")
+    # Models (env overrides these; haiku is the dev default)
+    model_reviewer: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_reviewer")
+    model_qa: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_qa")
+    model_coder: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_coder")
 
     # Loop caps
     max_fix_attempts: int = Field(default=5, alias="smrt_max_fix_attempts")

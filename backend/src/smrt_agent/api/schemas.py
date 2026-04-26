@@ -18,9 +18,9 @@ class ProjectOut(BaseModel):
 
 
 class ProjectConfig(BaseModel):
-    reviewer_model: str = "claude-opus-4-7"
-    qa_model: str = "claude-sonnet-4-6"
-    coder_model: str = "claude-sonnet-4-6"
+    reviewer_model: str = "claude-haiku-4-5-20251001"
+    qa_model: str = "claude-haiku-4-5-20251001"
+    coder_model: str = "claude-haiku-4-5-20251001"
     max_fix_attempts: int = 5
     max_questions_per_attempt: int = 1
     scheduler_cadence: str = "daily_0300"
