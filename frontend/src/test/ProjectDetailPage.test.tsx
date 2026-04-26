@@ -171,13 +171,19 @@ describe('ProjectDetailPage', () => {
         ]),
       ),
     )
+    const user = userEvent.setup()
     renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^runs$/i }))
+    await user.click(screen.getByRole('button', { name: /^runs$/i }))
     await waitFor(() => expect(screen.getByTestId('past-run-viewer')).toBeInTheDocument())
     expect(screen.getByText(/PastRunViewer:run-old-123/)).toBeInTheDocument()
   })
 
   it('renders the DocPanel section', async () => {
+    const user = userEvent.setup()
     renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^docs$/i }))
+    await user.click(screen.getByRole('button', { name: /^docs$/i }))
     await waitFor(() => expect(screen.getByTestId('doc-panel')).toBeInTheDocument())
   })
 

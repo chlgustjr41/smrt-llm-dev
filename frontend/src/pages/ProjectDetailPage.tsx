@@ -217,6 +217,117 @@ function TestsTab({ projectId }: { projectId: number }) {
   )
 }
 
+// ── Runs tab ──────────────────────────────────────────────────────────────
+
+function RunsTab({
+  projectId,
+  pastRuns,
+}: {
+  projectId: number
+  pastRuns: AgentRunSummary[]
+}) {
+  if (pastRuns.length === 0) {
+    return (
+      <Card>
+        <CardHeader title="Run History" />
+        <div className="px-5 py-8 text-sm text-gray-400 text-center">
+          No runs yet. Click &lsquo;Run Init Audit&rsquo; in the Overview tab.
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Run History" />
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-4 py-2.5">Run ID</th>
+              <th className="text-left px-4 py-2.5">Status</th>
+              <th className="text-right px-4 py-2.5">In tokens</th>
+              <th className="text-right px-4 py-2.5">Out tokens</th>
+              <th className="text-left px-4 py-2.5">Started</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {pastRuns.map((run) => (
+              <React.Fragment key={run.run_id}>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-2.5 font-mono text-xs text-gray-500 truncate max-w-[12rem]">
+                    {run.run_id}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <StatusBadge status={run.status} />
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
+                    {run.total_input_tokens.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
+                    {run.total_output_tokens.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2.5 text-gray-400 text-xs">
+                    {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                  </td>
+                </tr>
+                <tr className="bg-gray-50">
+                  <td colSpan={5} className="px-4 py-2">
+                    <PastRunViewer projectId={projectId} runId={run.run_id} />
+                  </td>
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+// ── Docs tab ──────────────────────────────────────────────────────────────
+
+function DocsTab({ projectId }: { projectId: number }) {
+  const [regenMsg, setRegenMsg] = useState<string | null>(null)
+
+  async function handleRegenAll() {
+    const confirmed = window.confirm(
+      'This will re-run the documentation agent for all endpoints and modules. Continue?'
+    )
+    if (!confirmed) return
+    try {
+      await createRun(projectId)
+      setRegenMsg('Regeneration started — switch to the Overview tab to monitor progress.')
+    } catch (e: unknown) {
+      setRegenMsg(e instanceof Error ? e.message : 'Failed to start regeneration')
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Documentation"
+        action={
+          <button
+            onClick={handleRegenAll}
+            className="inline-flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          >
+            Regenerate All
+          </button>
+        }
+      />
+      {regenMsg && (
+        <div className="mx-5 mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+          {regenMsg}
+        </div>
+      )}
+      <div className="p-5">
+        <DocPanel projectId={projectId} />
+      </div>
+    </Card>
+  )
+}
+
 // ── Config tab ────────────────────────────────────────────────────────────
 
 const MODEL_OPTIONS = [
@@ -417,7 +528,7 @@ export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const projectId = Number(id)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'config' | 'tests'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'runs' | 'docs' | 'tests' | 'config'>('overview')
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -519,23 +630,33 @@ export function ProjectDetailPage() {
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-gray-200">
-        {(['overview', 'tests', 'config'] as const).map((tab) => (
+        {(
+          [
+            ['overview', 'Overview'],
+            ['runs', 'Runs'],
+            ['docs', 'Docs'],
+            ['tests', 'Tests'],
+            ['config', 'Config'],
+          ] as const
+        ).map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === tab
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {tab}
+            {label}
           </button>
         ))}
       </div>
 
       {activeTab === 'config' && <ConfigTab projectId={projectId} />}
       {activeTab === 'tests' && <TestsTab projectId={projectId} />}
+      {activeTab === 'runs' && <RunsTab projectId={projectId} pastRuns={pastRuns} />}
+      {activeTab === 'docs' && <DocsTab projectId={projectId} />}
 
       {activeTab === 'overview' && <>
 
@@ -578,54 +699,6 @@ export function ProjectDetailPage() {
           </div>
         )}
       </Card>
-
-      {/* ── Run history ── */}
-      {pastRuns.length > 0 && (
-        <Card>
-          <CardHeader title="Run History" />
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">
-                <tr>
-                  <th className="text-left px-4 py-2.5">Run ID</th>
-                  <th className="text-left px-4 py-2.5">Status</th>
-                  <th className="text-right px-4 py-2.5">In tokens</th>
-                  <th className="text-right px-4 py-2.5">Out tokens</th>
-                  <th className="text-left px-4 py-2.5">Started</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {pastRuns.map((run) => (
-                  <React.Fragment key={run.run_id}>
-                    <tr className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-2.5 font-mono text-xs text-gray-500 truncate max-w-[12rem]">
-                        {run.run_id}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <StatusBadge status={run.status} />
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
-                        {run.total_input_tokens.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
-                        {run.total_output_tokens.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-400 text-xs">
-                        {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
-                      </td>
-                    </tr>
-                    <tr className="bg-gray-50">
-                      <td colSpan={5} className="px-4 py-2">
-                        <PastRunViewer projectId={projectId} runId={run.run_id} />
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
 
       {/* ── QA / Test Session ── */}
       <Card>
@@ -708,14 +781,6 @@ export function ProjectDetailPage() {
           </div>
         </Card>
       </div>
-
-      {/* ── Documentation ── */}
-      <Card>
-        <CardHeader title="Documentation" />
-        <div className="p-5">
-          <DocPanel projectId={projectId} />
-        </div>
-      </Card>
 
       </>}
     </div>
