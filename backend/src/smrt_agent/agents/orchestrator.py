@@ -1,5 +1,6 @@
 """QA session orchestrator: coordinates QA → HITL → Coder → recheck loop."""
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,20 @@ from smrt_agent.agents.qa.tools import run_pytest
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_pending_pr(project_path: Path, ticket_id: str, session_id: str, recheck_output: str) -> None:
+    """Append a pending PR entry to .smrt/pending-prs.jsonl."""
+    pr_log = project_path / ".smrt" / "pending-prs.jsonl"
+    pr_log.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "ticket_id": ticket_id,
+        "session_id": session_id,
+        "recheck_output": recheck_output[:500],
+        "fixed_at": _ts(),
+    }
+    with pr_log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 async def run_qa_session(
@@ -136,6 +151,8 @@ async def run_qa_session(
         })
 
         if "passed" in recheck_output and "failed" not in recheck_output:
+            _record_pending_pr(project_path, ticket_id, session_id, recheck_output)
+            await queue.put({"type": "pr_ready", "ticket_id": ticket_id, "session_id": session_id, "ts": _ts()})
             await queue.put({
                 "type": "session_status",
                 "status": "done",
