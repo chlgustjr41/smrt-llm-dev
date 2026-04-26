@@ -98,6 +98,18 @@ def append_lesson(project_path: Path, ticket_id: str, action: str, entry_text: s
     project_md_path.write_text(text, encoding="utf-8")
 
 
+def sync_wiki_log(project_path: Path, ticket_id: str, ticket_title: str, action: str) -> None:
+    """Append a log entry to wiki/log.md on PR accept/reject. Silent no-op if wiki/ absent."""
+    from datetime import datetime, timezone
+    wiki_log = project_path / "wiki" / "log.md"
+    if not wiki_log.parent.exists():
+        return
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    entry = f"- `{ts}` **{ticket_id} ({action})**: {ticket_title}\n"
+    with wiki_log.open("a", encoding="utf-8") as f:
+        f.write(entry)
+
+
 def append_rejection(project_path: Path, ticket_id: str, ticket_title: str, reason: str) -> None:
     """Append a rejection record to .smrt/rejections.jsonl."""
     from datetime import datetime, timezone

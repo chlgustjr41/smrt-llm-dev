@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from smrt_agent.api.deps import get_db
 from smrt_agent.db.models import Project
 from smrt_agent.agents.qa.tools import append_bugs_resolved
-from smrt_agent.knowledge import append_lesson, append_rejection
+from smrt_agent.knowledge import append_lesson, append_rejection, sync_wiki_log
 
 router = APIRouter(prefix="/projects", tags=["pr"])
 
@@ -81,6 +81,7 @@ async def accept_pr(
     append_bugs_resolved(project_path, ticket_id, "Accepted via PR surface review.")
     ticket_title = _get_ticket_title(project_path, ticket_id)
     append_lesson(project_path, ticket_id, "accepted", f"{ticket_title} — fix passed all tests.")
+    sync_wiki_log(project_path, ticket_id, ticket_title, "accepted")
     return {"ticket_id": ticket_id, "status": "accepted"}
 
 
