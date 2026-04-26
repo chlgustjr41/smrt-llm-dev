@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import Markdown from 'react-markdown'
-import { listTickets, approveTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession } from '../api/tickets'
+import { listTickets, approveTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport } from '../api/tickets'
 import { getCoderStatus, type CoderStatus } from '../api/coder'
 import { getQASessionEvents } from '../api/qa_sessions'
 import { acceptPR, rejectPR } from '../api/pr'
@@ -302,6 +302,29 @@ function TicketSessionHistory({
 
 // ── Ticket detail dialog ──────────────────────────────────────────────────
 
+function FailureReportBanner({ report }: { report: TicketFailureReport }) {
+  const isNotBug = report.recommendation === 'possibly_not_a_bug'
+  return (
+    <div className={`border-b px-5 py-3 space-y-2 ${isNotBug ? 'bg-orange-50 border-orange-200' : 'bg-red-50 border-red-200'}`}>
+      <div className="flex items-center gap-2">
+        <span className={`text-sm font-semibold ${isNotBug ? 'text-orange-700' : 'text-red-700'}`}>
+          {isNotBug ? '⚠ Possibly not a real bug' : '⚠ Fix loop exhausted — needs more attempts'}
+        </span>
+      </div>
+      <p className={`text-xs leading-relaxed ${isNotBug ? 'text-orange-700' : 'text-red-700'}`}>
+        {report.analysis}
+      </p>
+      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full font-medium border ${
+        isNotBug
+          ? 'bg-orange-100 border-orange-300 text-orange-800'
+          : 'bg-blue-50 border-blue-200 text-blue-700'
+      }`}>
+        {isNotBug ? '📋 Recommend: review ticket validity or add targeted tests' : '🔄 Recommend: increase max_fix_attempts or review coder changes manually'}
+      </span>
+    </div>
+  )
+}
+
 function TicketDialog({
   ticket,
   col,
@@ -317,9 +340,8 @@ function TicketDialog({
   onAccept?: () => void
   onReject?: () => void
 }) {
-  const [showHistory, setShowHistory] = useState(
-    ticket.status === 'in_progress' || ticket.status === 'qa_review',
-  )
+  const hasHistory = Boolean(ticket.session_id)
+  const [showHistory, setShowHistory] = useState(hasHistory)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -352,16 +374,18 @@ function TicketDialog({
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0 mt-0.5">
-            <button
-              onClick={() => setShowHistory((x) => !x)}
-              className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                showHistory
-                  ? 'border-blue-200 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 text-gray-500 hover:bg-gray-100'
-              }`}
-            >
-              {showHistory ? '▲ Hide history' : '▼ Agent history'}
-            </button>
+            {hasHistory && (
+              <button
+                onClick={() => setShowHistory((x) => !x)}
+                className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                  showHistory
+                    ? 'border-blue-200 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                {showHistory ? '▲ Hide history' : '▼ Agent history'}
+              </button>
+            )}
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none"
@@ -371,13 +395,16 @@ function TicketDialog({
           </div>
         </div>
 
+        {/* Failure report banner — only for loop-exhausted tickets */}
+        {ticket.failure_report && <FailureReportBanner report={ticket.failure_report} />}
+
         {/* Session history pane */}
-        {showHistory && (
+        {showHistory && hasHistory && (
           <div className="border-b border-gray-100 max-h-72 overflow-y-auto bg-gray-50">
             <TicketSessionHistory
               projectId={projectId}
               ticketId={ticket.id}
-              activeSessionId={ticket.session_id}
+              activeSessionId={isActive ? ticket.session_id : null}
             />
           </div>
         )}
@@ -389,8 +416,8 @@ function TicketDialog({
           </div>
         </div>
 
-        {/* Accept / Reject actions */}
-        {ticket.status === 'needs_review' && (onAccept || onReject) && (
+        {/* Accept / Reject — only for PR-ready needs_review (no failure_report) */}
+        {ticket.status === 'needs_review' && !ticket.failure_report && (onAccept || onReject) && (
           <div className="flex items-center gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50">
             <span className="text-xs text-gray-500 flex-1">Accept to merge the fix or reject to requeue it.</span>
             {onReject && (
@@ -421,79 +448,49 @@ function TicketDialog({
 function TicketCard({
   ticket,
   col,
-  projectId,
   draggable,
   onClick,
 }: {
   ticket: Ticket
   col: ColumnConfig
-  projectId: number
   draggable?: boolean
   onClick: () => void
 }) {
-  const [showHistory, setShowHistory] = useState(false)
-
   function onDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('ticketId', ticket.id)
     e.dataTransfer.effectAllowed = 'move'
   }
 
-  const hasSession = Boolean(ticket.session_id)
   const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
+  const hasFailureReport = Boolean(ticket.failure_report)
 
   return (
-    <div className="rounded-lg border overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-      {/* Card body */}
-      <div
-        draggable={draggable}
-        onDragStart={draggable ? onDragStart : undefined}
-        onClick={onClick}
-        className={`
-          ${col.borderCls} ${col.cardBg}
-          px-3 py-2.5 cursor-pointer select-none transition-colors
-          ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}
-        `}
-      >
-        <div className="flex items-start gap-2">
-          <span className={`font-mono text-[11px] shrink-0 mt-0.5 px-1.5 py-0.5 rounded ${col.accentCls}`}>
-            {ticket.id}
-          </span>
-          <span className="text-sm text-gray-800 leading-snug line-clamp-2 flex-1">{ticket.title}</span>
-        </div>
-        {draggable && (
-          <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to start Coder fix</p>
+    <div
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      onClick={onClick}
+      className={`rounded-lg border ${col.borderCls} ${col.cardBg} px-3 py-2.5 cursor-pointer select-none shadow-sm hover:shadow-md transition-all ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+    >
+      <div className="flex items-start gap-2">
+        <span className={`font-mono text-[11px] shrink-0 mt-0.5 px-1.5 py-0.5 rounded ${col.accentCls}`}>
+          {ticket.id}
+        </span>
+        <span className="text-sm text-gray-800 leading-snug line-clamp-2 flex-1">{ticket.title}</span>
+        {isActive && (
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0 mt-1" title={ticket.status === 'qa_review' ? 'QA checking…' : 'Coder fixing…'} />
         )}
       </div>
-
-      {/* History toggle bar — shown when the ticket has any session */}
-      {hasSession && (
-        <div className={`border-t ${col.borderCls} px-2 py-1 flex items-center gap-2 ${col.headerCls}`}>
-          {isActive && (
-            <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse shrink-0 opacity-60" />
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowHistory((x) => !x) }}
-            className={`text-[11px] font-medium flex-1 text-left ${col.textCls} hover:underline`}
-          >
-            {showHistory
-              ? '▲ Hide history'
-              : isActive
-                ? `▼ ${ticket.status === 'qa_review' ? 'QA checking…' : 'Coder fixing…'} view log`
-                : '▼ View agent history'
-            }
-          </button>
-        </div>
+      {draggable && (
+        <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to start Coder fix</p>
       )}
-
-      {/* Inline history pane */}
-      {showHistory && ticket.session_id && (
-        <div className="border-t border-gray-100">
-          <TicketSessionHistory
-            projectId={projectId}
-            ticketId={ticket.id}
-            activeSessionId={isActive ? ticket.session_id : null}
-          />
-        </div>
+      {hasFailureReport && (
+        <p className="text-[10px] text-red-500 mt-1.5 font-medium">
+          ⚠ {ticket.failure_report?.recommendation === 'possibly_not_a_bug' ? 'Possibly not a bug' : 'Fix loop exhausted'}
+          {' · click for insights'}
+        </p>
+      )}
+      {ticket.session_id && !isActive && !hasFailureReport && (
+        <p className="text-[10px] text-gray-400 mt-1">↗ Click to view agent history</p>
       )}
     </div>
   )
@@ -504,13 +501,11 @@ function TicketCard({
 function KanbanColumn({
   col,
   tickets,
-  projectId,
   onDrop,
   onTicketClick,
 }: {
   col: ColumnConfig
   tickets: Ticket[]
-  projectId: number
   onDrop?: (ticketId: string) => void
   onTicketClick: (ticket: Ticket) => void
 }) {
@@ -543,7 +538,7 @@ function KanbanColumn({
       </div>
 
       <div
-        className={`flex flex-col gap-2 p-2 flex-1 transition-colors min-h-[8rem] ${
+        className={`flex flex-col gap-2 p-2 flex-1 transition-colors min-h-[28rem] ${
           dragOver ? 'bg-blue-50 ring-2 ring-blue-300 ring-inset' : 'bg-gray-50'
         }`}
         onDragOver={handleDragOver}
@@ -564,7 +559,6 @@ function KanbanColumn({
             key={t.id}
             ticket={t}
             col={col}
-            projectId={projectId}
             draggable={col.status === 'pending_confirmation'}
             onClick={() => onTicketClick(t)}
           />
@@ -760,7 +754,6 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
               key={col.status}
               col={col}
               tickets={tickets.filter((t) => t.status === col.status)}
-              projectId={projectId}
               onDrop={col.acceptsDrop ? (tid) => handleDrop(tid, tickets, setTickets, projectId, fetchTickets) : undefined}
               onTicketClick={setSelectedTicket}
             />,

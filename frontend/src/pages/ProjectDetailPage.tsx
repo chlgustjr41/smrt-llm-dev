@@ -528,8 +528,7 @@ function TicketsTab({ projectId, refreshKey }: { projectId: number; refreshKey?:
   return (
     <Card>
       <CardHeader title="Bug Tickets" />
-      {/* No inner padding — the board manages its own spacing and needs full width */}
-      <div className="px-3 py-3">
+      <div className="p-2">
         <TicketsPanel projectId={projectId} refreshKey={refreshKey} />
       </div>
     </Card>
@@ -652,7 +651,7 @@ export function ProjectDetailPage() {
   const activeRunStatus = runId ? pastRuns.find((r) => r.run_id === runId)?.status : null
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+    <div className={`${activeTab === 'tickets' ? 'w-full px-4' : 'max-w-4xl mx-auto px-6'} py-8 space-y-6`}>
       {/* Breadcrumb */}
       <Link to="/" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 transition-colors">
         ← All projects

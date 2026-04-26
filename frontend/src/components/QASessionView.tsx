@@ -28,18 +28,20 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
     async function loadFromLog() {
       try {
         const logged = await getQASessionEvents(projectId, sessionId)
-        if (cancelled || logged.length === 0) return
-        setEvents(logged)
-        const cost = logged
-          .filter((e) => e.type === 'qa_done' || e.type === 'coder_done')
-          .reduce((s, e) => s + (e.cost_usd ?? 0), 0)
-        if (cost > 0) setTotalCost(cost)
-        const lastDone = [...logged].reverse().find((e) =>
-          ['done', 'error', 'budget_exceeded', 'timeout'].includes(e.type),
-        )
-        if (lastDone) {
-          setDone(true)
-          onCompleteRef.current?.(lastDone.status ?? lastDone.type)
+        if (!cancelled && logged.length > 0) {
+          setEvents(logged)
+          const cost = logged
+            .filter((e) => e.type === 'qa_done' || e.type === 'coder_done')
+            .reduce((s, e) => s + (e.cost_usd ?? 0), 0)
+          if (cost > 0) setTotalCost(cost)
+          const lastDone = [...logged].reverse().find((e) =>
+            ['done', 'error', 'budget_exceeded', 'timeout'].includes(e.type),
+          )
+          if (lastDone) {
+            setDone(true)
+            onCompleteRef.current?.(lastDone.status ?? lastDone.type)
+            return
+          }
         }
       } catch {
         // silently ignore — empty events list is fine

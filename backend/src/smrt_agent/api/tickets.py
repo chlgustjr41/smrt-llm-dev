@@ -85,6 +85,25 @@ async def list_tickets(
                 except json.JSONDecodeError:
                     pass
 
+    # Loop-exhausted tickets (failed-fixes.jsonl) — also shown in Needs Review
+    failed_fix_reports: dict[str, dict] = {}
+    failed_log = Path(project.canonical_path) / ".smrt" / "failed-fixes.jsonl"
+    if failed_log.exists():
+        for line in failed_log.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entry = json.loads(line)
+                    tid = entry.get("ticket_id", "")
+                    if tid:
+                        failed_fix_reports[tid] = {
+                            "recommendation": entry.get("recommendation"),
+                            "analysis": entry.get("analysis"),
+                        }
+                        pending_review_ids.add(tid)
+                except json.JSONDecodeError:
+                    pass
+
     # Active fix sessions — derive in_progress vs qa_review from QASession.status
     active_result = await db.execute(
         select(QASession.ticket_id, QASession.session_id, QASession.status)
@@ -107,7 +126,6 @@ async def list_tickets(
         select(QASession.ticket_id, QASession.session_id)
         .where(QASession.project_id == project_id)
         .where(QASession.completed_at.is_not(None))
-        .where(QASession.status == "done")
         .where(QASession.ticket_id.is_not(None))
         .order_by(QASession.completed_at.desc())
     )
@@ -146,6 +164,7 @@ async def list_tickets(
             "content": content,
             "status": status,
             "session_id": session_id,
+            "failure_report": failed_fix_reports.get(ticket_id) if status == "needs_review" else None,
         })
     return results
 

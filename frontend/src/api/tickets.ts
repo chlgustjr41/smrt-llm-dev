@@ -2,12 +2,18 @@ import { apiFetch } from './client'
 
 export type TicketStatus = 'pending_confirmation' | 'in_progress' | 'qa_review' | 'needs_review' | 'closed'
 
+export interface TicketFailureReport {
+  recommendation: 'needs_more_attempts' | 'possibly_not_a_bug'
+  analysis: string
+}
+
 export interface Ticket {
   id: string
   title: string
   content: string
   status: TicketStatus
   session_id: string | null
+  failure_report?: TicketFailureReport | null
 }
 
 export interface ApproveTicketResult {
