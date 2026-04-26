@@ -12,6 +12,13 @@ from smrt_agent.db.models import Project
 router = APIRouter(prefix="/projects", tags=["tickets"])
 
 
+def _read_in_progress_ids(project_path: Path) -> set[str]:
+    p = project_path / ".smrt" / "in-progress-tickets.txt"
+    if not p.exists():
+        return set()
+    return {line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
 @router.get("/{project_id}/tickets")
 async def list_tickets(
     project_id: int,
@@ -47,16 +54,21 @@ async def list_tickets(
                 except json.JSONDecodeError:
                     pass
 
+    in_progress_ids = _read_in_progress_ids(Path(project.canonical_path))
+
     results = []
     for path in sorted(tickets_dir.glob("*.md")):
         content = path.read_text(encoding="utf-8")
         lines = content.splitlines()
         title = lines[0].lstrip("#").strip() if lines else path.stem
         ticket_id = path.stem
+        # Priority: terminal states override earlier ones
         if ticket_id in resolved_ids:
             status = "closed"
         elif ticket_id in pending_review_ids:
             status = "needs_review"
+        elif ticket_id in in_progress_ids:
+            status = "in_progress"
         else:
             status = "pending_confirmation"
         results.append({
@@ -66,3 +78,27 @@ async def list_tickets(
             "status": status,
         })
     return results
+
+
+@router.post("/{project_id}/tickets/{ticket_id}/approve")
+async def approve_ticket(
+    project_id: int,
+    ticket_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    ticket_path = Path(project.canonical_path) / ".smrt" / "tickets" / f"{ticket_id}.md"
+    if not ticket_path.exists():
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    in_progress_path = Path(project.canonical_path) / ".smrt" / "in-progress-tickets.txt"
+    in_progress_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = _read_in_progress_ids(Path(project.canonical_path))
+    existing.add(ticket_id)
+    in_progress_path.write_text("\n".join(sorted(existing)) + "\n", encoding="utf-8")
+
+    return {"ticket_id": ticket_id, "status": "in_progress"}

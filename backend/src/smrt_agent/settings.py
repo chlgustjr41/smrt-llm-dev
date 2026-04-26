@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 def _find_env_file() -> Path | None:
@@ -19,12 +24,10 @@ def _find_env_file() -> Path | None:
     return None
 
 
-_ENV_FILE = _find_env_file()
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_FILE) if _ENV_FILE else None,
+        # env_file is intentionally not set here; it is resolved dynamically in
+        # settings_customise_sources so that tests can monkeypatch _find_env_file.
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -66,10 +69,21 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # Dotenv file beats OS environment variables so that ANTHROPIC_API_KEY
-        # in the project's .env is always used, even if the host shell has a
-        # different key exported (e.g. from another project).
-        return (init_settings, dotenv_settings, env_settings, file_secret_settings)
+        # Resolve the .env file dynamically so tests can monkeypatch _find_env_file.
+        # Dotenv beats OS env vars: ANTHROPIC_API_KEY in the project's .env is always
+        # used, even if the host shell has a different key exported (e.g. another project).
+        # In Docker _find_env_file() returns None → dotenv source contributes nothing →
+        # Docker's env_file: injection (regular OS env vars in the container) applies.
+        env_file = _find_env_file()
+        if env_file:
+            fresh_dotenv = DotEnvSettingsSource(
+                settings_cls,
+                env_file=str(env_file),
+                env_file_encoding="utf-8",
+                case_sensitive=False,
+            )
+            return (init_settings, fresh_dotenv, env_settings, file_secret_settings)
+        return (init_settings, env_settings, file_secret_settings)
 
     @property
     def allowed_project_roots(self) -> list[str]:

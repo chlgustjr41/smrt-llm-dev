@@ -528,7 +528,8 @@ function TicketsTab({ projectId, refreshKey }: { projectId: number; refreshKey?:
   return (
     <Card>
       <CardHeader title="Bug Tickets" />
-      <div className="p-5">
+      {/* No inner padding — the board manages its own spacing and needs full width */}
+      <div className="px-3 py-3">
         <TicketsPanel projectId={projectId} refreshKey={refreshKey} />
       </div>
     </Card>

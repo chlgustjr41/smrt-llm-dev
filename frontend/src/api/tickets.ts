@@ -12,3 +12,7 @@ export interface Ticket {
 export async function listTickets(projectId: number, signal?: AbortSignal): Promise<Ticket[]> {
   return apiFetch<Ticket[]>(`/projects/${projectId}/tickets`, { signal })
 }
+
+export async function approveTicket(projectId: number, ticketId: string): Promise<void> {
+  await apiFetch(`/projects/${projectId}/tickets/${ticketId}/approve`, { method: 'POST' })
+}
