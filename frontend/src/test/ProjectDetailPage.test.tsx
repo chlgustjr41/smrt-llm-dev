@@ -136,19 +136,34 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('qa-session-view')).toBeInTheDocument())
   })
 
-  it('renders the TicketsPanel section', async () => {
+  it('shows Tickets tab in the tab bar', async () => {
     renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: /^tickets$/i })).toBeInTheDocument())
+  })
+
+  it('renders the TicketsPanel section', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => screen.getByRole('button', { name: /^tickets$/i }))
+    await user.click(screen.getByRole('button', { name: /^tickets$/i }))
     await waitFor(() => expect(screen.getByTestId('tickets-panel')).toBeInTheDocument())
   })
 
   it('increments ticketsRefreshKey when QA session completes', async () => {
     const user = userEvent.setup()
     renderPage()
+    // Navigate to Tickets tab so TicketsPanel is mounted and confirm initial key=0
+    await waitFor(() => screen.getByRole('button', { name: /^tickets$/i }))
+    await user.click(screen.getByRole('button', { name: /^tickets$/i }))
+    await waitFor(() => screen.getByText(/TicketsPanel:1:0/))
+    // Go back to Overview to start QA session
+    await user.click(screen.getByRole('button', { name: /^overview$/i }))
     await waitFor(() => screen.getByRole('button', { name: /run qa session/i }))
     await user.click(screen.getByRole('button', { name: /run qa session/i }))
     await waitFor(() => screen.getByTestId('qa-session-view'))
-    expect(screen.getByText(/TicketsPanel:1:0/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /complete-qa/i }))
+    // Go to Tickets tab to see the updated refreshKey
+    await user.click(screen.getByRole('button', { name: /^tickets$/i }))
     await waitFor(() =>
       expect(screen.getByText(/TicketsPanel:1:1/)).toBeInTheDocument()
     )

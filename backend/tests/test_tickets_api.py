@@ -71,6 +71,32 @@ async def test_list_tickets_returns_files(tickets_dir):
         app.dependency_overrides.clear()
 
 
+async def test_list_tickets_includes_status_closed_for_resolved(tmp_path):
+    """Tickets mentioned in bugs-resolved.md get status 'closed'."""
+    smrt = tmp_path / ".smrt"
+    (smrt / "tickets").mkdir(parents=True)
+    (smrt / "tickets" / "2026-04-24-001.md").write_text("# Bug\nDetails.", encoding="utf-8")
+    (smrt / "bugs-resolved.md").write_text("## 2026-04-24-001\n\nFixed it.", encoding="utf-8")
+
+    async def override_db():
+        from unittest.mock import AsyncMock, MagicMock
+        db = AsyncMock()
+        project = MagicMock(spec=Project)
+        project.canonical_path = str(tmp_path)
+        db.get = AsyncMock(return_value=project)
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/projects/1/tickets")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["status"] == "closed"
+    finally:
+        app.dependency_overrides.clear()
+
+
 async def test_list_tickets_404_for_unknown_project():
     async def override_db():
         from unittest.mock import AsyncMock

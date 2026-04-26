@@ -10,11 +10,13 @@ const mockTickets = [
     id: '2026-04-24-001',
     title: 'GET /items returns 404',
     content: '# GET /items returns 404\nThe endpoint is missing from the router.',
+    status: 'pending_confirmation',
   },
   {
     id: '2026-04-24-002',
     title: 'POST /items ignores body',
     content: '# POST /items ignores body\nInput data is discarded.',
+    status: 'closed',
   },
 ]
 
@@ -62,12 +64,25 @@ describe('TicketsPanel', () => {
     server.use(
       http.get('http://localhost/api/projects/1/tickets', () =>
         HttpResponse.json([
-          { id: '2026-04-24-003', title: 'New ticket', content: '# New ticket\nNew content.' },
+          {
+            id: '2026-04-24-003',
+            title: 'New ticket',
+            content: '# New ticket\nNew content.',
+            status: 'pending_confirmation',
+          },
         ]),
       ),
     )
 
     rerender(<TicketsPanel projectId={1} refreshKey={1} />)
     await waitFor(() => expect(screen.getByText('2026-04-24-003')).toBeInTheDocument())
+  })
+
+  it('renders tickets in correct kanban columns', async () => {
+    render(<TicketsPanel projectId={1} />)
+    await waitFor(() => screen.getByText('Pending Confirmation'))
+    expect(screen.getByText('Closed')).toBeInTheDocument()
+    expect(screen.getByText('2026-04-24-001')).toBeInTheDocument()  // pending col
+    expect(screen.getByText('2026-04-24-002')).toBeInTheDocument()  // closed col
   })
 })

@@ -24,14 +24,26 @@ async def list_tickets(
     if not tickets_dir.exists():
         return []
 
+    # Read bugs-resolved.md to determine which tickets are closed
+    resolved_ids: set[str] = set()
+    resolved_path = Path(project.canonical_path) / ".smrt" / "bugs-resolved.md"
+    if resolved_path.exists():
+        resolved_text = resolved_path.read_text(encoding="utf-8")
+        for line in resolved_text.splitlines():
+            if line.startswith("## "):
+                resolved_ids.add(line[3:].strip())
+
     results = []
     for path in sorted(tickets_dir.glob("*.md")):
         content = path.read_text(encoding="utf-8")
         lines = content.splitlines()
         title = lines[0].lstrip("#").strip() if lines else path.stem
+        ticket_id = path.stem
+        status = "closed" if ticket_id in resolved_ids else "pending_confirmation"
         results.append({
-            "id": path.stem,
+            "id": ticket_id,
             "title": title,
             "content": content,
+            "status": status,
         })
     return results

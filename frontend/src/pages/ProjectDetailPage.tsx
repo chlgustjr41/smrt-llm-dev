@@ -522,13 +522,26 @@ function ConfigTab({ projectId }: { projectId: number }) {
   )
 }
 
+// ── Tickets tab ───────────────────────────────────────────────────────────
+
+function TicketsTab({ projectId, refreshKey }: { projectId: number; refreshKey?: number }) {
+  return (
+    <Card>
+      <CardHeader title="Bug Tickets" />
+      <div className="p-5">
+        <TicketsPanel projectId={projectId} refreshKey={refreshKey} />
+      </div>
+    </Card>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const projectId = Number(id)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'runs' | 'docs' | 'tests' | 'config'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'tickets' | 'runs' | 'docs' | 'tests' | 'config'>('overview')
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -633,6 +646,7 @@ export function ProjectDetailPage() {
         {(
           [
             ['overview', 'Overview'],
+            ['tickets', 'Tickets'],
             ['runs', 'Runs'],
             ['docs', 'Docs'],
             ['tests', 'Tests'],
@@ -657,6 +671,7 @@ export function ProjectDetailPage() {
       {activeTab === 'tests' && <TestsTab projectId={projectId} />}
       {activeTab === 'runs' && <RunsTab projectId={projectId} pastRuns={pastRuns} />}
       {activeTab === 'docs' && <DocsTab projectId={projectId} />}
+      {activeTab === 'tickets' && <TicketsTab projectId={projectId} refreshKey={ticketsRefreshKey} />}
 
       {activeTab === 'overview' && <>
 
@@ -737,14 +752,6 @@ export function ProjectDetailPage() {
             Run a QA session to have agents automatically test, file bug tickets, and generate fixes.
           </div>
         )}
-      </Card>
-
-      {/* ── Bug Tickets ── */}
-      <Card>
-        <CardHeader title="Bug Tickets" />
-        <div className="p-5">
-          <TicketsPanel projectId={projectId} refreshKey={ticketsRefreshKey} />
-        </div>
       </Card>
 
       {/* ── Dashboards ── */}
