@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
-from smrt_agent.db.models import Project
+from smrt_agent.db.models import Project, QASession
 
 router = APIRouter(prefix="/projects", tags=["tickets"])
 
@@ -56,17 +57,28 @@ async def list_tickets(
 
     in_progress_ids = _read_in_progress_ids(Path(project.canonical_path))
 
+    # Tickets the active QA-Coder loop is currently reviewing
+    qa_result = await db.execute(
+        select(QASession.ticket_id)
+        .where(QASession.project_id == project_id)
+        .where(QASession.completed_at.is_(None))
+        .where(QASession.ticket_id.is_not(None))
+    )
+    qa_review_ids = {row[0] for row in qa_result.all()}
+
     results = []
     for path in sorted(tickets_dir.glob("*.md")):
         content = path.read_text(encoding="utf-8")
         lines = content.splitlines()
         title = lines[0].lstrip("#").strip() if lines else path.stem
         ticket_id = path.stem
-        # Priority: terminal states override earlier ones
+        # Priority: closed > needs_review > qa_review > in_progress > pending
         if ticket_id in resolved_ids:
             status = "closed"
         elif ticket_id in pending_review_ids:
             status = "needs_review"
+        elif ticket_id in qa_review_ids:
+            status = "qa_review"
         elif ticket_id in in_progress_ids:
             status = "in_progress"
         else:

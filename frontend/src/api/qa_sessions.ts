@@ -1,4 +1,5 @@
 import { apiFetch } from './client'
+import type { AgentEvent } from '../components/AgentTimeline'
 
 export interface QASessionCreated {
   session_id: string
@@ -23,4 +24,16 @@ export function skipQASession(projectId: number, sessionId: string): Promise<HIT
   return apiFetch<HITLDecision>(`/projects/${projectId}/qa-sessions/${sessionId}/skip`, {
     method: 'POST',
   })
+}
+
+export async function getQASessionEvents(
+  projectId: number,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AgentEvent[]> {
+  const data = await apiFetch<{ events: AgentEvent[] }>(
+    `/projects/${projectId}/qa-sessions/${sessionId}/events`,
+    { signal },
+  )
+  return data.events
 }

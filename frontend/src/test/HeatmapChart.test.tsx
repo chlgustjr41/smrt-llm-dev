@@ -1,28 +1,16 @@
-import React from 'react'
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { HeatmapChart } from '../components/HeatmapChart'
 
-vi.mock('recharts', () => ({
-  Treemap: ({ data, onClick }: { data: Array<{ name: string; size: number; bugs_resolved: number; path: string }>; onClick?: (node: any) => void }) => (
-    <div data-testid="treemap">
-      {data?.map((d, i) => (
-        <div
-          key={i}
-          data-testid="treemap-cell"
-          data-name={d.name}
-          onClick={() => onClick?.({ name: d.name, size: d.size, bugs_resolved: d.bugs_resolved, path: d.path })}
-        >
-          {d.name}
-        </div>
-      ))}
-    </div>
-  ),
-  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}))
+// jsdom doesn't implement ResizeObserver — provide a no-op stub
+global.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 
 const mockData = [
   { file: 'src/api/main.py', loc: 200, bugs_resolved: 3 },
@@ -48,8 +36,11 @@ describe('HeatmapChart', () => {
   it('shows treemap cells after data loads', async () => {
     render(<HeatmapChart projectId={1} />)
     await waitFor(() => expect(screen.getByTestId('treemap')).toBeInTheDocument())
-    expect(screen.getByText('src/api/main.py')).toBeInTheDocument()
-    expect(screen.getByText('src/utils/helpers.py')).toBeInTheDocument()
+    const cells = screen.getAllByTestId('treemap-cell')
+    expect(cells.length).toBe(2)
+    // Largest file (200 LOC) sorts first
+    expect(cells[0]).toHaveAttribute('data-name', 'src/api/main.py')
+    expect(cells[1]).toHaveAttribute('data-name', 'src/utils/helpers.py')
   })
 
   it('shows empty state when no data', async () => {
@@ -82,17 +73,13 @@ describe('HeatmapChart', () => {
     await waitFor(() => expect(screen.getByTestId('treemap')).toBeInTheDocument())
 
     const cells = screen.getAllByTestId('treemap-cell')
-    // Click first cell (src/api/main.py)
+    // Click first cell — should show detail panel with the file's full path
     await user.click(cells[0])
-    // Detail panel should be visible (file path appears in both treemap cell and detail panel)
-    expect(screen.getAllByText(/src\/api\/main\.py/i).length).toBeGreaterThan(0)
-    // Detail panel should show lines and bugs_resolved values
-    expect(screen.getByText(/200/)).toBeInTheDocument()
+    expect(screen.getByText('src/api/main.py')).toBeInTheDocument()
     expect(screen.getByText(/bugs resolved/i)).toBeInTheDocument()
 
     // Click same cell again to deselect
     await user.click(cells[0])
-    // Detail panel should be gone
     expect(screen.queryByText(/bugs resolved/i)).not.toBeInTheDocument()
   })
 })

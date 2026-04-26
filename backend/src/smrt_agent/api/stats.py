@@ -1,5 +1,6 @@
 """Analytics stats API: cost breakdown, heatmap, doc-completeness history."""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -14,8 +15,20 @@ from smrt_agent.db.models import AgentRun, Project
 
 router = APIRouter(prefix="/projects", tags=["stats"])
 
-_COST_PER_MTOK_IN = 15.0   # Opus 4.7 input cost per million tokens
-_COST_PER_MTOK_OUT = 75.0  # Opus 4.7 output cost per million tokens
+# Cost per million tokens (input, output) by model substring match
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (0.80, 4.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-7": (15.00, 75.00),
+}
+_DEFAULT_PRICING = (3.00, 15.00)  # sonnet fallback
+
+
+def _model_cost_per_mtok(model: str) -> tuple[float, float]:
+    for key, pricing in _MODEL_PRICING.items():
+        if key in model:
+            return pricing
+    return _DEFAULT_PRICING
 
 _IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -40,11 +53,19 @@ async def get_cost_stats(
     )
     runs = result.scalars().all()
 
+    config_raw = project.config or "{}"
+    try:
+        config_data = json.loads(config_raw)
+    except json.JSONDecodeError:
+        config_data = {}
+    reviewer_model = config_data.get("reviewer_model", "claude-sonnet-4-6")
+    cost_in, cost_out = _model_cost_per_mtok(reviewer_model)
+
     data = []
     for run in runs:
         reviewer_cost = (
-            (run.total_input_tokens / 1_000_000) * _COST_PER_MTOK_IN
-            + (run.total_output_tokens / 1_000_000) * _COST_PER_MTOK_OUT
+            (run.total_input_tokens / 1_000_000) * cost_in
+            + (run.total_output_tokens / 1_000_000) * cost_out
         )
         data.append({
             "run_id": run.run_id,
@@ -115,33 +136,54 @@ async def get_test_status(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    yaml_path = Path(project.canonical_path) / ".smrt" / "knowledge" / "test-status.yaml"
-    if not yaml_path.exists():
-        return {"tests": [], "version": 1}
+    project_path = Path(project.canonical_path)
 
-    try:
-        raw = yaml_path.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw) or {}
-    except Exception:
-        return {"tests": [], "version": 1}
+    # Prefer structured YAML if it exists (future-proof path)
+    yaml_path = project_path / ".smrt" / "knowledge" / "test-status.yaml"
+    if yaml_path.exists():
+        try:
+            raw = yaml_path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw) or {}
+            version = data.get("version", 1)
+            raw_tests: dict = data.get("tests") or {}
+            tests = []
+            for name, info in raw_tests.items():
+                if not isinstance(info, dict):
+                    continue
+                last_run_at = info.get("last_run_at")
+                tests.append({
+                    "name": name,
+                    "status": info.get("status", "green"),
+                    "last_run_at": last_run_at.isoformat() if hasattr(last_run_at, "isoformat") else (str(last_run_at) if last_run_at is not None else None),
+                    "promoted_to": info.get("promoted_to", None),
+                    "last_runs": info.get("last_runs") or [],
+                })
+            return {"version": version, "tests": tests}
+        except Exception:
+            pass
 
-    version = data.get("version", 1)
-    raw_tests: dict = data.get("tests") or {}
+    # Fall back: discover test files the QA agent actually wrote to .smrt/tests/
+    tests_dir = project_path / ".smrt" / "tests"
+    if not tests_dir.exists():
+        return {"tests": [], "version": 1}
 
     tests = []
-    for name, info in raw_tests.items():
-        if not isinstance(info, dict):
-            continue
-        last_run_at = info.get("last_run_at")
+    for test_file in sorted(tests_dir.glob("test_*.py")):  # noqa: ASYNC240
+        try:
+            stat = test_file.stat()
+            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+            mtime_str = mtime.isoformat()
+        except OSError:
+            mtime_str = None
         tests.append({
-            "name": name,
-            "status": info.get("status", "green"),
-            "last_run_at": last_run_at.isoformat() if hasattr(last_run_at, "isoformat") else (str(last_run_at) if last_run_at is not None else None),
-            "promoted_to": info.get("promoted_to", None),
-            "last_runs": info.get("last_runs") or [],
+            "name": test_file.name,
+            "status": "green",
+            "last_run_at": mtime_str,
+            "promoted_to": None,
+            "last_runs": [],
         })
 
-    return {"version": version, "tests": tests}
+    return {"version": 1, "tests": tests}
 
 
 @router.get("/{project_id}/stats/doc-completeness")

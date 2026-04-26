@@ -33,7 +33,7 @@ def run_pytest(project_path: Path) -> str:
         return "No test files found in .smrt/tests/"
     env = {**os.environ, "PYTHONPATH": str(project_path)}
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests_dir), "-v", "--tb=short", "--asyncio-mode=auto"],
+        [sys.executable, "-m", "pytest", str(tests_dir), "-v", "--tb=short"],
         capture_output=True,
         text=True,
         timeout=120,

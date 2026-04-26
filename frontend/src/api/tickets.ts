@@ -1,6 +1,6 @@
 import { apiFetch } from './client'
 
-export type TicketStatus = 'pending_confirmation' | 'in_progress' | 'needs_review' | 'closed'
+export type TicketStatus = 'pending_confirmation' | 'in_progress' | 'qa_review' | 'needs_review' | 'closed'
 
 export interface Ticket {
   id: string

@@ -24,6 +24,9 @@ const server = setupServer(
   http.get('http://localhost/api/projects/1/tickets', () =>
     HttpResponse.json(mockTickets),
   ),
+  http.get('http://localhost/api/projects/1/coder/status', () =>
+    HttpResponse.json({ idle: true, session_id: null, status: null, ticket_id: null }),
+  ),
 )
 
 beforeAll(() => server.listen())
