@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getProject, listRuns, type Project, type AgentRunSummary } from '../api/projects'
+import { getConfig, patchConfig, type ProjectConfig } from '../api/config'
 import { createRun } from '../api/runs'
 import { LiveAgentView } from '../components/LiveAgentView'
 import { createQASession } from '../api/qa_sessions'
@@ -53,12 +54,207 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+// ── Config tab ────────────────────────────────────────────────────────────
+
+const MODEL_OPTIONS = [
+  { value: 'claude-opus-4-7', label: 'claude-opus-4-7' },
+  { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
+  { value: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001' },
+]
+
+const CADENCE_OPTIONS = [
+  { value: 'daily_0300', label: 'Daily at 3am' },
+  { value: 'hourly', label: 'Hourly' },
+  { value: 'manual', label: 'Manual only' },
+]
+
+const CONFIG_DEFAULTS: ProjectConfig = {
+  reviewer_model: 'claude-opus-4-7',
+  qa_model: 'claude-sonnet-4-6',
+  coder_model: 'claude-sonnet-4-6',
+  max_fix_attempts: 5,
+  max_questions_per_attempt: 1,
+  scheduler_cadence: 'daily_0300',
+  thought_process_mode: false,
+}
+
+function ConfigTab({ projectId }: { projectId: number }) {
+  const [config, setConfig] = useState<ProjectConfig>(CONFIG_DEFAULTS)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getConfig(projectId)
+      .then(setConfig)
+      .catch((e) => setLoadError(e instanceof Error ? e.message : 'Failed to load config'))
+  }, [projectId])
+
+  function handleChange(field: keyof ProjectConfig, value: string | number | boolean) {
+    setConfig((prev) => ({ ...prev, [field]: value }))
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setSaveError(null)
+    setSaved(false)
+    try {
+      const updated = await patchConfig(projectId, config)
+      setConfig(updated)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to save config')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+        {loadError}
+      </div>
+    )
+  }
+
+  const labelCls = 'block text-sm font-medium text-gray-700 mb-1'
+  const inputCls = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+  const selectCls = inputCls
+
+  return (
+    <Card>
+      <CardHeader title="Project Configuration" />
+      <div className="p-5 space-y-5">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          {/* Reviewer Model */}
+          <div>
+            <label className={labelCls}>Reviewer Model</label>
+            <select
+              className={selectCls}
+              value={config.reviewer_model}
+              onChange={(e) => handleChange('reviewer_model', e.target.value)}
+            >
+              {MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* QA Model */}
+          <div>
+            <label className={labelCls}>QA Model</label>
+            <select
+              className={selectCls}
+              value={config.qa_model}
+              onChange={(e) => handleChange('qa_model', e.target.value)}
+            >
+              {MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Coder Model */}
+          <div>
+            <label className={labelCls}>Coder Model</label>
+            <select
+              className={selectCls}
+              value={config.coder_model}
+              onChange={(e) => handleChange('coder_model', e.target.value)}
+            >
+              {MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Scheduler Cadence */}
+          <div>
+            <label className={labelCls}>Scheduler Cadence</label>
+            <select
+              className={selectCls}
+              value={config.scheduler_cadence}
+              onChange={(e) => handleChange('scheduler_cadence', e.target.value)}
+            >
+              {CADENCE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Max Fix Attempts */}
+          <div>
+            <label className={labelCls}>Max Fix Attempts</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              className={inputCls}
+              value={config.max_fix_attempts}
+              onChange={(e) => handleChange('max_fix_attempts', Number(e.target.value))}
+            />
+          </div>
+
+          {/* Max Questions per Attempt */}
+          <div>
+            <label className={labelCls}>Max Questions per Attempt</label>
+            <input
+              type="number"
+              min={0}
+              max={5}
+              className={inputCls}
+              value={config.max_questions_per_attempt}
+              onChange={(e) => handleChange('max_questions_per_attempt', Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {/* Thought-Process Mode */}
+        <div className="flex items-center gap-3">
+          <input
+            id="thought-process-mode"
+            type="checkbox"
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            checked={config.thought_process_mode}
+            onChange={(e) => handleChange('thought_process_mode', e.target.checked)}
+          />
+          <label htmlFor="thought-process-mode" className="text-sm font-medium text-gray-700">
+            Thought-Process Mode
+          </label>
+        </div>
+
+        {saveError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {saveError}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          {saved && (
+            <span className="text-sm text-emerald-600 font-medium">Saved!</span>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const projectId = Number(id)
 
+  const [activeTab, setActiveTab] = useState<'overview' | 'config'>('overview')
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -157,6 +353,27 @@ export function ProjectDetailPage() {
         <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
         <p className="font-mono text-sm text-gray-400">{project.canonical_path}</p>
       </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-gray-200">
+        {(['overview', 'config'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+              activeTab === tab
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'config' && <ConfigTab projectId={projectId} />}
+
+      {activeTab === 'overview' && <>
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
@@ -335,6 +552,8 @@ export function ProjectDetailPage() {
           <DocPanel projectId={projectId} />
         </div>
       </Card>
+
+      </>}
     </div>
   )
 }

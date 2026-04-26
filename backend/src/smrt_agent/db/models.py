@@ -16,6 +16,7 @@ class Project(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    config: Mapped[str] = mapped_column(String(4096), nullable=False, default='{}')
 
     runs: Mapped[list["AgentRun"]] = relationship("AgentRun", back_populates="project")
     qa_sessions: Mapped[list["QASession"]] = relationship("QASession", back_populates="project")
