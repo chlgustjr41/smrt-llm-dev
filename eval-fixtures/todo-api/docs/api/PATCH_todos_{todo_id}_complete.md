@@ -2,4 +2,4 @@
 
 **Authentication:** None
 
-**Purpose:** Mark a todo done and increment a global completed counter.
+**Purpose:** Mark a todo as done and increment a global `_completed_count`

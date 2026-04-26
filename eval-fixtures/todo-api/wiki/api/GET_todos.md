@@ -1,11 +1,11 @@
 ---
 type: endpoint
 tags: []
-updated: 2026-04-25
+updated: 2026-04-26
 ---
 
 # GET /todos
 
 **Authentication:** None
 
-**Purpose:** List all todos (raw dicts, no response model).
+**Purpose:** List all todos

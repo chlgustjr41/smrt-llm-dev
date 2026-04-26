@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -7,10 +8,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
-from smrt_agent.api.schemas import AgentRunOut, ProjectCreate, ProjectOut
+from smrt_agent.api.schemas import AgentRunOut, ProjectConfig, ProjectConfigPatch, ProjectCreate, ProjectOut
 from smrt_agent.db.models import AgentRun, Project
 from smrt_agent.platform_paths import canonicalize
 from smrt_agent.settings import Settings
+
+CONFIG_DEFAULTS = {
+    "reviewer_model": "claude-opus-4-7",
+    "qa_model": "claude-sonnet-4-6",
+    "coder_model": "claude-sonnet-4-6",
+    "max_fix_attempts": 5,
+    "max_questions_per_attempt": 1,
+    "scheduler_cadence": "daily_0300",
+    "thought_process_mode": False,
+}
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -99,3 +110,42 @@ async def list_runs(
         .order_by(AgentRun.started_at.desc())
     )
     return list(result.scalars().all())
+
+
+@router.get("/{project_id}/config", response_model=ProjectConfig)
+async def get_project_config(
+    project_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProjectConfig:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        stored = json.loads(project.config or '{}')
+    except (json.JSONDecodeError, TypeError):
+        stored = {}
+    merged = {**CONFIG_DEFAULTS, **stored}
+    return ProjectConfig(**merged)
+
+
+@router.patch("/{project_id}/config", response_model=ProjectConfig)
+async def patch_project_config(
+    project_id: int,
+    body: ProjectConfigPatch,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProjectConfig:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        stored = json.loads(project.config or '{}')
+    except (json.JSONDecodeError, TypeError):
+        stored = {}
+    # Merge only the provided (non-None) fields
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    stored.update(updates)
+    project.config = json.dumps(stored)
+    await db.commit()
+    await db.refresh(project)
+    merged = {**CONFIG_DEFAULTS, **json.loads(project.config)}
+    return ProjectConfig(**merged)

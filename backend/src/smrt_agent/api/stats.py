@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Annotated
 
+import yaml
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,6 +104,44 @@ async def get_heatmap(
 
     files.sort(key=lambda x: x["loc"], reverse=True)
     return {"files": files[:50]}
+
+
+@router.get("/{project_id}/tests")
+async def get_test_status(
+    project_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    yaml_path = Path(project.canonical_path) / ".smrt" / "knowledge" / "test-status.yaml"
+    if not yaml_path.exists():
+        return {"tests": [], "version": 1}
+
+    try:
+        raw = yaml_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw) or {}
+    except Exception:
+        return {"tests": [], "version": 1}
+
+    version = data.get("version", 1)
+    raw_tests: dict = data.get("tests") or {}
+
+    tests = []
+    for name, info in raw_tests.items():
+        if not isinstance(info, dict):
+            continue
+        last_run_at = info.get("last_run_at")
+        tests.append({
+            "name": name,
+            "status": info.get("status", "green"),
+            "last_run_at": last_run_at.isoformat() if hasattr(last_run_at, "isoformat") else (str(last_run_at) if last_run_at is not None else None),
+            "promoted_to": info.get("promoted_to", None),
+            "last_runs": info.get("last_runs") or [],
+        })
+
+    return {"version": version, "tests": tests}
 
 
 @router.get("/{project_id}/stats/doc-completeness")

@@ -2,12 +2,16 @@
 from pathlib import Path
 
 from smrt_agent.agents.reviewer.tools import _SECRET_SPEC
+from smrt_agent.hooks.secret_guard import is_blocked
 
 _BLOCKED_DIRS = {".smrt", "tests", "docs"}
 
 
 def read_source_file(project_path: Path, rel_path: str) -> str:
     """Read a source file. Blocks .smrt/, tests/, docs/ and secret files."""
+    blocked, reason = is_blocked(project_path, rel_path)
+    if blocked:
+        return f"Access denied: {reason}"
     first_part = Path(rel_path).parts[0] if Path(rel_path).parts else ""
     if first_part in _BLOCKED_DIRS:
         raise PermissionError(f"read_source_file cannot read from {first_part}/: {rel_path!r}")
@@ -22,6 +26,9 @@ def read_source_file(project_path: Path, rel_path: str) -> str:
 
 def write_source_file(project_path: Path, rel_path: str, content: str) -> str:
     """Write/overwrite a source file. Blocks .smrt/, tests/, docs/."""
+    blocked, reason = is_blocked(project_path, rel_path)
+    if blocked:
+        return f"Access denied: {reason}"
     first_part = Path(rel_path).parts[0] if Path(rel_path).parts else ""
     if first_part in _BLOCKED_DIRS:
         raise PermissionError(f"write_source_file cannot write to {first_part}/: {rel_path!r}")

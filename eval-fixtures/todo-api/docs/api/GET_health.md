@@ -2,4 +2,4 @@
 
 **Authentication:** None
 
-**Purpose:** Liveness probe; returns `{"status": "ok"}`.
+**Purpose:** Liveness probe; returns `{"status": "ok"}`

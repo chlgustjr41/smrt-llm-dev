@@ -1,11 +1,11 @@
 ---
 type: endpoint
 tags: []
-updated: 2026-04-25
+updated: 2026-04-26
 ---
 
 # GET /users
 
 **Authentication:** None
 
-**Purpose:** List all users as `UserOut`.
+**Purpose:** List all users
