@@ -560,6 +560,10 @@ export function ProjectDetailPage() {
         if (controller.signal.aborted) return
         setProject(proj)
         setPastRuns(runs)
+        // Hydrate with the latest run so the timeline is visible immediately
+        if (runs.length > 0) {
+          setRunId(runs[0].run_id)
+        }
       })
       .catch((e) => {
         if (controller.signal.aborted) return
@@ -572,6 +576,7 @@ export function ProjectDetailPage() {
   async function handleRunAudit() {
     setStarting(true)
     setError(null)
+    setRunId(null) // unmount LiveAgentView before remounting with new run
     try {
       const run = await createRun(projectId)
       setRunId(run.run_id)
@@ -692,24 +697,30 @@ export function ProjectDetailPage() {
         <CardHeader
           title="Init Audit"
           action={
-            !runId ? (
-              <button
-                onClick={handleRunAudit}
-                disabled={starting}
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-              >
-                {starting ? (
-                  <><span className="animate-spin">⟳</span> Starting…</>
-                ) : (
-                  <><span>🔍</span> Run Init Audit</>
-                )}
-              </button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-gray-400 truncate max-w-[14rem]">{runId}</span>
-                {activeRunStatus && <StatusBadge status={activeRunStatus} />}
-              </div>
-            )
+            <div className="flex items-center gap-3">
+              {runId && (
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-gray-400 truncate max-w-[12rem]">{runId}</span>
+                  {activeRunStatus && <StatusBadge status={activeRunStatus} />}
+                </div>
+              )}
+              {/* Show "New Audit" when idle or when the current run has finished */}
+              {(!runId || !activeRunStatus || ['done', 'error', 'skipped'].includes(activeRunStatus)) && (
+                <button
+                  onClick={handleRunAudit}
+                  disabled={starting}
+                  className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+                >
+                  {starting ? (
+                    <><span className="animate-spin">⟳</span> Starting…</>
+                  ) : runId ? (
+                    <><span>🔍</span> New Audit</>
+                  ) : (
+                    <><span>🔍</span> Run Init Audit</>
+                  )}
+                </button>
+              )}
+            </div>
           }
         />
         {runId ? (

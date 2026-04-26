@@ -22,6 +22,7 @@ export interface AgentEvent {
 interface ToolCallPair {
   use: AgentEvent
   result: AgentEvent | null
+  reasoning: string // agent text that immediately preceded this tool call
 }
 
 interface AgentPhase {
@@ -80,25 +81,40 @@ const AGENT_META: Record<
 function makePhaseLabel(status: string, fixAttempt?: number): string {
   const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt}` : ''
   switch (status) {
-    case 'qa_running':      return `QA Agent${attempt}`
-    case 'coder_running':   return `Coder${attempt}`
-    case 'hitl_waiting':    return 'Awaiting Approval'
-    case 'done':            return 'Complete'
-    case 'error':           return 'Error'
-    case 'skipped':         return 'Skipped'
-    default:                return status
+    case 'qa_running':    return `QA Agent${attempt}`
+    case 'coder_running': return `Coder${attempt}`
+    case 'hitl_waiting':  return 'Awaiting Approval'
+    case 'done':          return 'Complete'
+    case 'error':         return 'Error'
+    case 'skipped':       return 'Skipped'
+    default:              return status
   }
 }
 
 function agentFromStatus(status: string): string {
-  if (status.startsWith('coder'))  return 'coder'
-  if (status.startsWith('qa'))     return 'qa'
+  if (status.startsWith('coder')) return 'coder'
+  if (status.startsWith('qa'))    return 'qa'
   return 'system'
+}
+
+// Strip markdown syntax for single-line previews
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/^#+\s*/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/^[-*]\s+/gm, '')
+    .replace(/\n+/g, ' ')
+    .trim()
 }
 
 function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase[] {
   const phases: AgentPhase[] = []
-  let toolUseQueue: AgentEvent[] = []
+  // Stores pending tool-use events together with the reasoning text that preceded them
+  let toolUseQueue: Array<{ event: AgentEvent; reasoning: string }> = []
+  let pendingText = '' // accumulates text_delta between tool calls
+
   let current: AgentPhase = {
     id: 'default',
     label: defaultLabel,
@@ -111,8 +127,11 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
 
   for (const event of events) {
     if (event.type === 'session_status' && event.status) {
-      toolUseQueue.forEach((use) => current.toolPairs.push({ use, result: null }))
+      toolUseQueue.forEach(({ event: use, reasoning }) =>
+        current.toolPairs.push({ use, result: null, reasoning }),
+      )
       toolUseQueue = []
+      pendingText = ''
       if (
         current.textEvents.length > 0 ||
         current.toolPairs.length > 0 ||
@@ -133,11 +152,14 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
       }
     } else if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(event.type)) {
       current.textEvents.push(event)
+      pendingText += event.text ?? ''
     } else if (event.type === 'tool_use') {
-      toolUseQueue.push(event)
+      // Capture everything the agent said since the last tool call as its reasoning
+      toolUseQueue.push({ event, reasoning: pendingText })
+      pendingText = ''
     } else if (event.type === 'tool_result') {
-      const use = toolUseQueue.shift()
-      if (use) current.toolPairs.push({ use, result: event })
+      const queued = toolUseQueue.shift()
+      if (queued) current.toolPairs.push({ use: queued.event, result: event, reasoning: queued.reasoning })
     } else if (event.type === 'recheck_output') {
       current.recheckEvent = event
     } else if (event.type === 'error') {
@@ -145,7 +167,9 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
     }
   }
 
-  toolUseQueue.forEach((use) => current.toolPairs.push({ use, result: null }))
+  toolUseQueue.forEach(({ event: use, reasoning }) =>
+    current.toolPairs.push({ use, result: null, reasoning }),
+  )
   if (
     current.textEvents.length > 0 ||
     current.toolPairs.length > 0 ||
@@ -163,12 +187,17 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
 function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: string }) {
   const [expanded, setExpanded] = useState(false)
   const meta = AGENT_META[agentType] ?? AGENT_META.system
+
   const inputStr = (() => {
     try { return JSON.stringify(pair.use.input, null, 2) } catch { return '[input]' }
   })()
   const inputPreview = (() => {
     try { return JSON.stringify(pair.use.input).slice(0, 80) } catch { return '[input]' }
   })()
+
+  const reasoningPreview = pair.reasoning
+    ? stripMarkdown(pair.reasoning).slice(0, 80)
+    : ''
 
   return (
     <div className={`rounded-md border text-xs font-mono ${meta.border} overflow-hidden`}>
@@ -178,9 +207,17 @@ function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: strin
         onClick={() => setExpanded((p) => !p)}
       >
         <span className="text-gray-400 w-3 shrink-0 text-center">{expanded ? '▾' : '▸'}</span>
-        <span className={`font-semibold ${meta.tool}`}>{pair.use.tool}</span>
+        <span className={`font-semibold shrink-0 ${meta.tool}`}>{pair.use.tool}</span>
         {!expanded && (
-          <span className="text-gray-400 truncate opacity-70">{inputPreview}</span>
+          <>
+            {reasoningPreview ? (
+              <span className="text-gray-400 truncate italic opacity-60 font-sans">
+                — {reasoningPreview}
+              </span>
+            ) : (
+              <span className="text-gray-400 truncate opacity-70">{inputPreview}</span>
+            )}
+          </>
         )}
         {pair.result && (
           <span className="ml-auto shrink-0 text-gray-400">
@@ -193,17 +230,37 @@ function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: strin
           </span>
         )}
       </button>
+
       {expanded && (
         <div className="border-t bg-gray-50 px-3 py-2.5 space-y-3">
+          {/* Why — agent's reasoning for this tool call, rendered as markdown */}
+          {pair.reasoning && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">
+                Why
+              </p>
+              <div className="prose prose-xs max-w-none text-gray-600 text-xs leading-relaxed bg-white border border-gray-100 rounded p-2 max-h-48 overflow-y-auto font-sans [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_code]:bg-gray-100 [&_code]:px-0.5 [&_code]:rounded">
+                <Markdown>{pair.reasoning}</Markdown>
+              </div>
+            </div>
+          )}
+
+          {/* Input */}
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">Input</p>
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">
+              Input
+            </p>
             <pre className="whitespace-pre-wrap text-gray-700 text-xs leading-relaxed bg-white border border-gray-100 rounded p-2">
               {inputStr}
             </pre>
           </div>
+
+          {/* Result */}
           {pair.result && (
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">Result</p>
+              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">
+                Result
+              </p>
               <pre className="whitespace-pre-wrap text-gray-600 text-xs leading-relaxed max-h-56 overflow-y-auto bg-white border border-gray-100 rounded p-2">
                 {pair.result.result}
               </pre>
@@ -224,7 +281,7 @@ function ThoughtBubble({ text, agentType }: { text: string; agentType: string })
       <p className={`text-[10px] uppercase tracking-wider mb-1.5 opacity-60 ${meta.tool}`}>
         {meta.icon} {meta.label} thoughts
       </p>
-      <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0">
+      <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0 [&_code]:bg-white/60 [&_code]:px-0.5 [&_code]:rounded">
         <Markdown>{text}</Markdown>
       </div>
     </div>
@@ -253,16 +310,18 @@ function PhaseSection({
   const text = phase.textEvents.map((e) => e.text ?? '').join('')
   const meta = AGENT_META[phase.agentType] ?? AGENT_META.system
 
-  // Status indicator for special phase types
-  const statusDecoration = phase.label === 'Complete'
-    ? <span className="ml-auto text-emerald-500 text-xs font-medium">✓ Done</span>
-    : phase.label === 'Error'
-    ? <span className="ml-auto text-red-500 text-xs font-medium">✗ Error</span>
-    : phase.label === 'Awaiting Approval'
-    ? <span className="ml-auto text-yellow-600 text-xs font-medium animate-pulse">⏳ HITL</span>
-    : phase.startTs
-    ? <span className="ml-auto text-[10px] text-gray-400">{new Date(phase.startTs).toLocaleTimeString()}</span>
-    : null
+  const statusDecoration =
+    phase.label === 'Complete' ? (
+      <span className="ml-auto text-emerald-500 text-xs font-medium">✓ Done</span>
+    ) : phase.label === 'Error' ? (
+      <span className="ml-auto text-red-500 text-xs font-medium">✗ Error</span>
+    ) : phase.label === 'Awaiting Approval' ? (
+      <span className="ml-auto text-yellow-600 text-xs font-medium animate-pulse">⏳ HITL</span>
+    ) : phase.startTs ? (
+      <span className="ml-auto text-[10px] text-gray-400">
+        {new Date(phase.startTs).toLocaleTimeString()}
+      </span>
+    ) : null
 
   return (
     <div className={`rounded-lg border shadow-sm overflow-hidden ${meta.border}`}>
@@ -280,12 +339,12 @@ function PhaseSection({
 
       {!collapsed && (
         <div className="bg-white p-3 space-y-2.5">
-          {/* Thought bubble (markdown rendered) */}
+          {/* Full thought stream (markdown) — visible only when showThoughts is on */}
           {showThoughts && text && (
             <ThoughtBubble text={text} agentType={phase.agentType} />
           )}
 
-          {/* Tool call pairs */}
+          {/* Tool call pairs — always shown; each includes its own Why section */}
           {phase.toolPairs.map((pair, i) => (
             <ToolCallRow
               key={`${pair.use.tool}-${pair.use.ts ?? i}`}
@@ -297,7 +356,9 @@ function PhaseSection({
           {/* Pytest recheck output */}
           {phase.recheckEvent && (
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">Pytest recheck</p>
+              <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">
+                Pytest recheck
+              </p>
               <pre
                 className={`text-xs p-2.5 rounded-md border whitespace-pre-wrap max-h-56 overflow-y-auto leading-relaxed ${
                   phase.recheckEvent.output?.includes('passed') &&
@@ -319,10 +380,14 @@ function PhaseSection({
             </div>
           )}
 
-          {/* Empty phase placeholder */}
-          {!showThoughts && !text && phase.toolPairs.length === 0 && !phase.recheckEvent && !phase.errorEvent && (
-            <p className="text-xs text-gray-400 italic py-1">No tool activity recorded.</p>
-          )}
+          {/* Empty placeholder */}
+          {!showThoughts &&
+            !text &&
+            phase.toolPairs.length === 0 &&
+            !phase.recheckEvent &&
+            !phase.errorEvent && (
+              <p className="text-xs text-gray-400 italic py-1">No tool activity recorded.</p>
+            )}
         </div>
       )}
     </div>
@@ -376,7 +441,9 @@ function clusterPhases(phases: AgentPhase[]): Array<
   | { kind: 'single'; phase: AgentPhase }
   | { kind: 'loop'; phases: AgentPhase[] }
 > {
-  const clusters: Array<{ kind: 'single'; phase: AgentPhase } | { kind: 'loop'; phases: AgentPhase[] }> = []
+  const clusters: Array<
+    { kind: 'single'; phase: AgentPhase } | { kind: 'loop'; phases: AgentPhase[] }
+  > = []
   let loopBuffer: AgentPhase[] = []
 
   function flushLoop() {
@@ -413,19 +480,12 @@ export function AgentTimeline({
   defaultLabel?: string
   showThoughts?: boolean
 }) {
-  const filteredEvents = useMemo(
-    () =>
-      showThoughts
-        ? events
-        : events.filter(
-            (e) => !['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type),
-          ),
-    [events, showThoughts],
-  )
-
+  // Always group all events so reasoning can be extracted from text_delta events
+  // even when showThoughts is off. The showThoughts flag only controls the
+  // ThoughtBubble rendering inside PhaseSection.
   const phases = useMemo(
-    () => groupIntoPhases(filteredEvents, defaultLabel),
-    [filteredEvents, defaultLabel],
+    () => groupIntoPhases(events, defaultLabel),
+    [events, defaultLabel],
   )
 
   const clusters = useMemo(() => clusterPhases(phases), [phases])
