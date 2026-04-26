@@ -76,31 +76,45 @@ export function CostChart({ projectId }: { projectId: number }) {
     </div>
   )
 
-  const chartData = data.map((entry) => ({
-    name: entry.run_id.slice(0, 8),
-    Reviewer: entry.reviewer_cost_usd,
-    QA: entry.qa_cost_usd,
-    Coder: entry.coder_cost_usd,
-    started_at: entry.started_at
-      ? new Date(entry.started_at).toLocaleDateString()
-      : null,
-  }))
+  const chartData = data.map((entry) => {
+    const label = entry.ticket_id
+      ? entry.ticket_id
+      : entry.type === 'qa_session'
+        ? `QA:${entry.run_id.slice(0, 6)}`
+        : `Rev:${entry.run_id.slice(0, 6)}`
+    return {
+      name: label,
+      Reviewer: entry.reviewer_cost_usd,
+      QA: entry.qa_cost_usd,
+      Coder: entry.coder_cost_usd,
+      started_at: entry.started_at
+        ? new Date(entry.started_at).toLocaleDateString()
+        : null,
+    }
+  })
 
   const totalCost = data.reduce(
     (s, r) => s + r.reviewer_cost_usd + r.qa_cost_usd + r.coder_cost_usd,
     0,
   )
+  const qaTotal = data.reduce((s, r) => s + r.qa_cost_usd + r.coder_cost_usd, 0)
 
   return (
     <div className="space-y-3">
       {/* Summary stat */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="text-sm">
-          <span className="text-gray-400 mr-1">Total cost:</span>
+          <span className="text-gray-400 mr-1">Total:</span>
           <span className="font-mono font-semibold text-gray-800">${totalCost.toFixed(4)}</span>
         </div>
+        {qaTotal > 0 && (
+          <div className="text-sm">
+            <span className="text-gray-400 mr-1">QA+Coder:</span>
+            <span className="font-mono font-semibold text-violet-700">${qaTotal.toFixed(4)}</span>
+          </div>
+        )}
         <div className="text-sm">
-          <span className="text-gray-400 mr-1">Runs:</span>
+          <span className="text-gray-400 mr-1">Entries:</span>
           <span className="font-semibold text-gray-800">{data.length}</span>
         </div>
       </div>

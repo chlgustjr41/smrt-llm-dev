@@ -150,6 +150,39 @@ async def list_tickets(
     return results
 
 
+@router.get("/{project_id}/tickets/{ticket_id}/sessions")
+async def list_ticket_sessions(
+    project_id: int,
+    ticket_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[dict]:
+    """Return all QA sessions that worked on a specific ticket, newest first.
+
+    Used by the Tickets tab to show per-ticket history: each session is an
+    expandable accordion entry that loads its events from the JSONL log.
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = await db.execute(
+        select(QASession)
+        .where(QASession.project_id == project_id)
+        .where(QASession.ticket_id == ticket_id)
+        .order_by(QASession.started_at.desc())
+    )
+    sessions = result.scalars().all()
+    return [
+        {
+            "session_id": s.session_id,
+            "status": s.status,
+            "fix_attempt": s.fix_attempt,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        }
+        for s in sessions
+    ]
+
+
 @router.post("/{project_id}/tickets/{ticket_id}/approve")
 async def approve_ticket(
     project_id: int,

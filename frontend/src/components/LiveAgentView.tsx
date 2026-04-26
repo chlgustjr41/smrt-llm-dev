@@ -14,7 +14,7 @@ export function LiveAgentView({
   const [events, setEvents] = useState<AgentEvent[]>([])
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
-  const [showThoughts, setShowThoughts] = useState(false)
+  const [showThoughts, setShowThoughts] = useState(true)
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 

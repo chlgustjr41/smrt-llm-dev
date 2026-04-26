@@ -6,12 +6,23 @@ export interface QASessionCreated {
   status: string
 }
 
+export interface QASessionLatest {
+  session_id: string | null
+  status: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
 export interface HITLDecision {
   decision: 'approve' | 'skip'
 }
 
 export function createQASession(projectId: number): Promise<QASessionCreated> {
   return apiFetch<QASessionCreated>(`/projects/${projectId}/qa-sessions`, { method: 'POST' })
+}
+
+export function getLatestQASession(projectId: number, signal?: AbortSignal): Promise<QASessionLatest> {
+  return apiFetch<QASessionLatest>(`/projects/${projectId}/qa-sessions/latest`, { signal })
 }
 
 export function approveQASession(projectId: number, sessionId: string): Promise<HITLDecision> {

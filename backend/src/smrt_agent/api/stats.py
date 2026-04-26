@@ -1,4 +1,5 @@
 """Analytics stats API: cost breakdown, heatmap, doc-completeness history."""
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
-from smrt_agent.db.models import AgentRun, Project
+from smrt_agent.db.models import AgentRun, Project, QASession
 
 router = APIRouter(prefix="/projects", tags=["stats"])
 
@@ -30,6 +31,37 @@ def _model_cost_per_mtok(model: str) -> tuple[float, float]:
             return pricing
     return _DEFAULT_PRICING
 
+
+def _parse_session_costs(sessions_dir: Path, session_id: str) -> tuple[float, float]:
+    """Read JSONL events for a session and sum QA + Coder costs.
+
+    Returns (qa_cost_usd, coder_cost_usd).  Each agent loop emits a *_done
+    event with cost_usd already computed; we just accumulate them.
+    """
+    log_path = sessions_dir / f"{session_id}.jsonl"
+    if not log_path.exists():
+        return 0.0, 0.0
+    qa_cost = 0.0
+    coder_cost = 0.0
+    try:
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                etype = event.get("type", "")
+                if etype == "qa_done":
+                    qa_cost += float(event.get("cost_usd") or 0)
+                elif etype == "coder_done":
+                    coder_cost += float(event.get("cost_usd") or 0)
+            except (json.JSONDecodeError, ValueError):
+                pass
+    except Exception:
+        pass
+    return qa_cost, coder_cost
+
+
 _IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
     ".smrt", "dist", "build", ".pytest_cache", ".mypy_cache",
@@ -46,29 +78,32 @@ async def get_cost_stats(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    result = await db.execute(
-        select(AgentRun)
-        .where(AgentRun.project_id == project_id)
-        .order_by(AgentRun.started_at)
-    )
-    runs = result.scalars().all()
-
     config_raw = project.config or "{}"
     try:
         config_data = json.loads(config_raw)
     except json.JSONDecodeError:
         config_data = {}
     reviewer_model = config_data.get("reviewer_model", "claude-sonnet-4-6")
-    cost_in, cost_out = _model_cost_per_mtok(reviewer_model)
+    cost_in_r, cost_out_r = _model_cost_per_mtok(reviewer_model)
+
+    # ── Reviewer runs ────────────────────────────────────────────────────────
+    run_result = await db.execute(
+        select(AgentRun)
+        .where(AgentRun.project_id == project_id)
+        .order_by(AgentRun.started_at)
+    )
+    runs = run_result.scalars().all()
 
     data = []
     for run in runs:
         reviewer_cost = (
-            (run.total_input_tokens / 1_000_000) * cost_in
-            + (run.total_output_tokens / 1_000_000) * cost_out
+            (run.total_input_tokens / 1_000_000) * cost_in_r
+            + (run.total_output_tokens / 1_000_000) * cost_out_r
         )
         data.append({
             "run_id": run.run_id,
+            "type": "reviewer_run",
+            "ticket_id": None,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "reviewer_cost_usd": round(reviewer_cost, 6),
             "qa_cost_usd": 0.0,
@@ -76,6 +111,38 @@ async def get_cost_stats(
             "reviewer_input_tokens": run.total_input_tokens,
             "reviewer_output_tokens": run.total_output_tokens,
         })
+
+    # ── QA sessions (full + per-ticket) ─────────────────────────────────────
+    qa_result = await db.execute(
+        select(QASession)
+        .where(QASession.project_id == project_id)
+        .where(QASession.completed_at.is_not(None))
+        .order_by(QASession.started_at)
+    )
+    qa_sessions = qa_result.scalars().all()
+
+    sessions_dir = Path(project.canonical_path) / ".smrt" / "qa-sessions"
+
+    for session in qa_sessions:
+        qa_cost, coder_cost = await asyncio.to_thread(
+            _parse_session_costs, sessions_dir, session.session_id
+        )
+        if qa_cost == 0.0 and coder_cost == 0.0:
+            continue  # no billable work logged yet — skip empty entries
+        data.append({
+            "run_id": session.session_id,
+            "type": "qa_session",
+            "ticket_id": session.ticket_id,
+            "started_at": session.started_at.isoformat() if session.started_at else None,
+            "reviewer_cost_usd": 0.0,
+            "qa_cost_usd": round(qa_cost, 6),
+            "coder_cost_usd": round(coder_cost, 6),
+            "reviewer_input_tokens": 0,
+            "reviewer_output_tokens": 0,
+        })
+
+    # Sort chronologically so chart bars are left→right in time order
+    data.sort(key=lambda x: x["started_at"] or "")
     return {"runs": data}
 
 
@@ -105,26 +172,29 @@ async def get_heatmap(
             except json.JSONDecodeError:
                 pass
 
-    # Scan source files for LOC
-    files = []
-    for path in project_path.rglob("*"):  # noqa: ASYNC240
-        if any(part in _IGNORE_DIRS for part in path.parts):
-            continue
-        if not path.is_file() or path.suffix not in _SOURCE_EXTS:
-            continue
-        try:
-            loc = max(len(path.read_text(encoding="utf-8", errors="replace").splitlines()), 1)
-        except Exception:
-            continue
-        rel = str(path.relative_to(project_path)).replace("\\", "/")
-        files.append({
-            "file": rel,
-            "loc": loc,
-            "bugs_resolved": file_bug_counts.get(rel, 0),
-        })
+    # Scan source files for LOC (offloaded to thread to avoid blocking the loop)
+    def _scan_files() -> list[dict]:
+        result = []
+        for path in project_path.rglob("*"):
+            if any(part in _IGNORE_DIRS for part in path.parts):
+                continue
+            if not path.is_file() or path.suffix not in _SOURCE_EXTS:
+                continue
+            try:
+                loc = max(len(path.read_text(encoding="utf-8", errors="replace").splitlines()), 1)
+            except Exception:
+                continue
+            rel = str(path.relative_to(project_path)).replace("\\", "/")
+            result.append({
+                "file": rel,
+                "loc": loc,
+                "bugs_resolved": file_bug_counts.get(rel, 0),
+            })
+        result.sort(key=lambda x: x["loc"], reverse=True)
+        return result[:50]
 
-    files.sort(key=lambda x: x["loc"], reverse=True)
-    return {"files": files[:50]}
+    files = await asyncio.to_thread(_scan_files)
+    return {"files": files}
 
 
 @router.get("/{project_id}/tests")
@@ -168,7 +238,7 @@ async def get_test_status(
         return {"tests": [], "version": 1}
 
     tests = []
-    for test_file in sorted(tests_dir.glob("test_*.py")):  # noqa: ASYNC240
+    for test_file in sorted(tests_dir.glob("test_*.py")):
         try:
             stat = test_file.stat()
             mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)

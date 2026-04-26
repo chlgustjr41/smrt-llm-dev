@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import Markdown from 'react-markdown'
-import { listTickets, approveTicket, type Ticket, type TicketStatus } from '../api/tickets'
+import { listTickets, approveTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession } from '../api/tickets'
 import { getCoderStatus, type CoderStatus } from '../api/coder'
 import { getQASessionEvents } from '../api/qa_sessions'
 import { acceptPR, rejectPR } from '../api/pr'
@@ -78,35 +78,224 @@ const COLUMNS: ColumnConfig[] = [
   },
 ]
 
-// ── Expandable session events pane ────────────────────────────────────────
+// ── Status badge for sessions ─────────────────────────────────────────────
 
-function SessionEventsPane({
+function sessionStatusBadge(status: string): string {
+  const map: Record<string, string> = {
+    coder_running: 'bg-amber-100 text-amber-700 border-amber-200',
+    qa_checking: 'bg-violet-100 text-violet-700 border-violet-200',
+    done: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    error: 'bg-red-100 text-red-600 border-red-200',
+    pending: 'bg-gray-100 text-gray-600 border-gray-200',
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-500 border-gray-200'
+}
+
+function sessionStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    coder_running: '🛠️ Coder fixing',
+    qa_checking: '🔬 QA verifying',
+    done: '✓ Done',
+    error: '✗ Error',
+    pending: 'Pending',
+  }
+  return map[status] ?? status
+}
+
+function formatRelTime(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const diff = Date.now() - d.getTime()
+  const min = Math.floor(diff / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return `${Math.floor(hr / 24)}d ago`
+}
+
+// ── Per-session event pane (polls JSONL for live sessions) ─────────────────
+
+function SessionEventPane({
   projectId,
-  sessionId,
+  session,
+  isActive,
 }: {
   projectId: number
-  sessionId: string
+  session: TicketSession
+  isActive: boolean
 }) {
   const [events, setEvents] = useState<AgentEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showThoughts, setShowThoughts] = useState(true)
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const data = await getQASessionEvents(projectId, session.session_id, signal)
+      if (!signal?.aborted) setEvents(data)
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name !== 'AbortError') {
+        setError(e.message)
+      }
+    }
+  }, [projectId, session.session_id])
+
+  // Initial load
+  useEffect(() => {
+    const ac = new AbortController()
+    load(ac.signal)
+    return () => ac.abort()
+  }, [load])
+
+  // Poll every 2 s while session is active so live events show up promptly
+  useEffect(() => {
+    if (!isActive) return
+    const interval = setInterval(() => load(), 2000)
+    return () => clearInterval(interval)
+  }, [isActive, load])
+
+  // Live thought ticker — last text segment since the most recent tool boundary
+  const liveThought = useMemo(() => {
+    if (!isActive || !events) return ''
+    let start = 0
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (['session_status', 'tool_result', 'tool_use'].includes(events[i].type)) {
+        start = i + 1
+        break
+      }
+    }
+    return events
+      .slice(start)
+      .filter((e) => ['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type))
+      .map((e) => e.text ?? '')
+      .join('')
+      .slice(-200)
+  }, [events, isActive])
+
+  if (error) return (
+    <p className="text-xs text-red-500 px-3 py-2">{error}</p>
+  )
+  if (!events) return (
+    <p className="text-xs text-gray-400 px-3 py-2 animate-pulse">Loading events…</p>
+  )
+  if (events.length === 0) return (
+    <p className="text-xs text-gray-400 italic px-3 py-2">No events recorded yet.</p>
+  )
+
+  return (
+    <div className="bg-gray-50 border-t border-gray-100 px-3 py-3 space-y-2.5">
+      {/* Controls row */}
+      <div className="flex items-center justify-between gap-2">
+        {isActive && (
+          <div className="flex items-center gap-1.5 text-xs text-amber-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            <span className="font-medium">Live — updates every 2 s</span>
+          </div>
+        )}
+        <button
+          type="button"
+          className={`ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+            showThoughts
+              ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+              : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+          }`}
+          onClick={() => setShowThoughts((p) => !p)}
+        >
+          🧠 {showThoughts ? 'Hide thoughts' : 'Show thoughts'}
+        </button>
+      </div>
+
+      {/* Live thought ticker */}
+      {isActive && liveThought && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-xs text-indigo-700 font-mono leading-relaxed">
+          <span className="shrink-0 opacity-60 mt-px">💭</span>
+          <span className="break-words whitespace-pre-wrap line-clamp-3">{liveThought}</span>
+        </div>
+      )}
+
+      {/* Timeline (scrollable) */}
+      <div className="max-h-96 overflow-y-auto pr-0.5">
+        <AgentTimeline events={events} showThoughts={showThoughts} />
+      </div>
+    </div>
+  )
+}
+
+// ── Per-ticket session history ────────────────────────────────────────────
+
+function TicketSessionHistory({
+  projectId,
+  ticketId,
+  activeSessionId,
+}: {
+  projectId: number
+  ticketId: string
+  activeSessionId: string | null
+}) {
+  const [sessions, setSessions] = useState<TicketSession[] | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(activeSessionId)
 
   useEffect(() => {
     const ac = new AbortController()
-    getQASessionEvents(projectId, sessionId, ac.signal)
-      .then(setEvents)
-      .catch((e: unknown) => {
-        if (e instanceof Error && e.name !== 'AbortError') setError(e.message)
+    getTicketSessions(projectId, ticketId, ac.signal)
+      .then((s) => {
+        setSessions(s)
+        // Auto-expand the active session
+        if (activeSessionId) setExpandedId(activeSessionId)
+        else if (s.length > 0) setExpandedId(s[0].session_id)
       })
+      .catch(() => setSessions([]))
     return () => ac.abort()
-  }, [projectId, sessionId])
+  }, [projectId, ticketId, activeSessionId])
 
-  if (error) return <p className="text-xs text-red-500 px-3 py-2">{error}</p>
-  if (!events) return <p className="text-xs text-gray-400 px-3 py-2 animate-pulse">Loading events…</p>
-  if (events.length === 0) return <p className="text-xs text-gray-400 italic px-3 py-2">No events recorded yet.</p>
+  if (sessions === null) return (
+    <div className="px-3 py-2 text-xs text-gray-400 animate-pulse">Loading session history…</div>
+  )
+  if (sessions.length === 0) return (
+    <div className="px-3 py-2 text-xs text-gray-400 italic">No sessions recorded yet.</div>
+  )
 
   return (
-    <div className="border-t border-gray-100 bg-gray-50 px-3 py-3 max-h-72 overflow-y-auto">
-      <AgentTimeline events={events} showThoughts />
+    <div className="divide-y divide-gray-100">
+      {sessions.map((s, i) => {
+        const isActive = s.session_id === activeSessionId
+        const isOpen = expandedId === s.session_id
+
+        return (
+          <div key={s.session_id}>
+            <button
+              type="button"
+              className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-50 transition-colors"
+              onClick={() => setExpandedId(isOpen ? null : s.session_id)}
+            >
+              <span className="text-[10px] text-gray-400 w-3 text-center shrink-0">
+                {isOpen ? '▾' : '▸'}
+              </span>
+              <span className="text-xs font-medium text-gray-600 shrink-0">
+                Session {sessions.length - i}
+              </span>
+              {isActive && (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+              )}
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${sessionStatusBadge(s.status)}`}>
+                {sessionStatusLabel(s.status)}
+              </span>
+              <span className="ml-auto text-[10px] text-gray-400 shrink-0">
+                {formatRelTime(s.started_at)}
+              </span>
+            </button>
+
+            {isOpen && (
+              <SessionEventPane
+                projectId={projectId}
+                session={s}
+                isActive={isActive}
+              />
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -128,13 +317,17 @@ function TicketDialog({
   onAccept?: () => void
   onReject?: () => void
 }) {
-  const [showEvents, setShowEvents] = useState(false)
+  const [showHistory, setShowHistory] = useState(
+    ticket.status === 'in_progress' || ticket.status === 'qa_review',
+  )
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
 
   return (
     <div
@@ -153,19 +346,22 @@ function TicketDialog({
             </span>
             <h2 className="text-base font-semibold text-gray-900 mt-1">{ticket.title}</h2>
             <span className={`inline-flex items-center gap-1 text-xs font-medium ${col.textCls}`}>
+              {isActive && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
               <span>{col.icon}</span>
               <span>{col.label}</span>
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0 mt-0.5">
-            {ticket.session_id && (
-              <button
-                onClick={() => setShowEvents((x) => !x)}
-                className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors"
-              >
-                {showEvents ? '▲ Hide log' : '▼ Agent log'}
-              </button>
-            )}
+            <button
+              onClick={() => setShowHistory((x) => !x)}
+              className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                showHistory
+                  ? 'border-blue-200 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              {showHistory ? '▲ Hide history' : '▼ Agent history'}
+            </button>
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none"
@@ -175,10 +371,14 @@ function TicketDialog({
           </div>
         </div>
 
-        {/* Agent log pane (collapsible) */}
-        {showEvents && ticket.session_id && (
-          <div className="border-b border-gray-100 max-h-60 overflow-y-auto bg-gray-50 px-5 py-3">
-            <SessionEventsPane projectId={projectId} sessionId={ticket.session_id} />
+        {/* Session history pane */}
+        {showHistory && (
+          <div className="border-b border-gray-100 max-h-72 overflow-y-auto bg-gray-50">
+            <TicketSessionHistory
+              projectId={projectId}
+              ticketId={ticket.id}
+              activeSessionId={ticket.session_id}
+            />
           </div>
         )}
 
@@ -231,7 +431,7 @@ function TicketCard({
   draggable?: boolean
   onClick: () => void
 }) {
-  const [showLogs, setShowLogs] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   function onDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('ticketId', ticket.id)
@@ -265,29 +465,35 @@ function TicketCard({
         )}
       </div>
 
-      {/* Agent log toggle — shown when ticket has a session and is active/done */}
+      {/* History toggle bar — shown when the ticket has any session */}
       {hasSession && (
         <div className={`border-t ${col.borderCls} px-2 py-1 flex items-center gap-2 ${col.headerCls}`}>
           {isActive && (
-            <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse shrink-0 opacity-60" style={{ color: 'currentColor' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse shrink-0 opacity-60" />
           )}
           <button
-            onClick={(e) => { e.stopPropagation(); setShowLogs((x) => !x) }}
+            onClick={(e) => { e.stopPropagation(); setShowHistory((x) => !x) }}
             className={`text-[11px] font-medium flex-1 text-left ${col.textCls} hover:underline`}
           >
-            {showLogs
-              ? '▲ Hide agent log'
+            {showHistory
+              ? '▲ Hide history'
               : isActive
                 ? `▼ ${ticket.status === 'qa_review' ? 'QA checking…' : 'Coder fixing…'} view log`
-                : '▼ View agent log'
+                : '▼ View agent history'
             }
           </button>
         </div>
       )}
 
-      {/* Inline log pane */}
-      {showLogs && ticket.session_id && (
-        <SessionEventsPane projectId={projectId} sessionId={ticket.session_id} />
+      {/* Inline history pane */}
+      {showHistory && ticket.session_id && (
+        <div className="border-t border-gray-100">
+          <TicketSessionHistory
+            projectId={projectId}
+            ticketId={ticket.id}
+            activeSessionId={isActive ? ticket.session_id : null}
+          />
+        </div>
       )}
     </div>
   )
@@ -410,8 +616,8 @@ function ResizeHandle({
 
     function onPointerUp() {
       setDragging(false)
-      handle.removeEventListener('pointermove', onPointerMove)
-      handle.removeEventListener('pointerup', onPointerUp)
+      handle!.removeEventListener('pointermove', onPointerMove)
+      handle!.removeEventListener('pointerup', onPointerUp)
     }
 
     handle.addEventListener('pointermove', onPointerMove)
@@ -442,14 +648,14 @@ function LoopStatusBanner({ projectId }: { projectId: number }) {
     try {
       setStatus(await getCoderStatus(projectId, signal))
     } catch {
-      // silently ignore — banner just won't update
+      // silently ignore
     }
   }, [projectId])
 
   useEffect(() => {
     const ac = new AbortController()
     fetchStatus(ac.signal)
-    const interval = setInterval(() => fetchStatus(), 8000)
+    const interval = setInterval(() => fetchStatus(), 5000)
     return () => { ac.abort(); clearInterval(interval) }
   }, [fetchStatus])
 
@@ -470,33 +676,31 @@ function LoopStatusBanner({ projectId }: { projectId: number }) {
       ? 'QA Agent — verifying fix'
       : `Running (${status.status})`
 
+  const detail = isCoderRunning
+    ? 'Editing source files…'
+    : 'Running test suite…'
+
   return (
-    <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border ${color.border} ${color.bg} text-sm`}>
+    <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border ${color.border} ${color.bg}`}>
       <span className={`w-2 h-2 rounded-full ${color.dot} animate-pulse shrink-0`} />
-      <span className={`font-medium ${color.text}`}>{label}</span>
-      {status.ticket_id && (
-        <span className={`font-mono text-xs px-2 py-0.5 rounded-full ${color.badge}`}>
-          {status.ticket_id}
-        </span>
-      )}
-      <span className={`text-xs ${color.text} opacity-70 ml-auto`}>
-        {isCoderRunning ? 'Editing source files…' : 'Running test suite…'}
-      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`text-sm font-medium ${color.text}`}>{label}</span>
+          {status.ticket_id && (
+            <span className={`font-mono text-xs px-2 py-0.5 rounded-full ${color.badge}`}>
+              {status.ticket_id}
+            </span>
+          )}
+        </div>
+        <p className={`text-xs ${color.text} opacity-70 mt-0.5`}>{detail}</p>
+      </div>
     </div>
   )
 }
 
-// ── Public component ───────────────────────────────────────────────────────
+// ── TicketsTab inner component (used from ProjectDetailPage) ───────────────
 
-export function TicketsPanel({
-  projectId,
-  refreshKey,
-  onReviewed,
-}: {
-  projectId: number
-  refreshKey?: number
-  onReviewed?: () => void
-}) {
+function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; refreshKey?: number; onReviewed?: () => void }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
@@ -514,7 +718,6 @@ export function TicketsPanel({
     }
   }, [projectId])
 
-  // Initial load + refresh on refreshKey change
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -522,66 +725,24 @@ export function TicketsPanel({
     return () => controller.abort()
   }, [projectId, refreshKey, fetchTickets])
 
-  // Poll every 8s while any ticket has an active session (coder/QA running)
+  // Poll every 5s while any ticket has an active session
   useEffect(() => {
     const hasActiveSession = tickets.some(
       (t) => t.session_id && (t.status === 'in_progress' || t.status === 'qa_review'),
     )
     if (!hasActiveSession) return
-    const interval = setInterval(() => fetchTickets(), 8000)
+    const interval = setInterval(() => fetchTickets(), 5000)
     return () => clearInterval(interval)
   }, [tickets, fetchTickets])
 
-  async function handleDrop(ticketId: string) {
-    const ticket = tickets.find((t) => t.id === ticketId)
-    if (!ticket || ticket.status !== 'pending_confirmation') return
-
-    // Optimistically move to in_progress
-    setTickets((prev) =>
-      prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)),
-    )
-    try {
-      const result = await approveTicket(projectId, ticketId)
-      // Update the ticket with the real session_id returned from approve
-      setTickets((prev) =>
-        prev.map((t) =>
-          t.id === ticketId
-            ? { ...t, status: 'in_progress', session_id: result.session_id }
-            : t,
-        ),
-      )
-    } catch {
-      await fetchTickets()
-    }
-  }
-
-  async function handleAccept(ticket: Ticket) {
-    await acceptPR(projectId, ticket.id)
-    await fetchTickets()
-    onReviewed?.()
-  }
-
-  async function handleReject(ticket: Ticket) {
-    await rejectPR(projectId, ticket.id)
-    await fetchTickets()
-    onReviewed?.()
-  }
-
-  const selectedCol = selectedTicket
-    ? (COLUMNS.find((c) => c.status === selectedTicket.status) ?? COLUMNS[0])
-    : null
-
   if (loading) return <p className="text-xs text-gray-400 px-1 py-2">Loading tickets…</p>
   if (tickets.length === 0) {
-    return <p className="text-xs text-gray-400 italic px-1 py-2">No bug tickets filed yet.</p>
+    return <p className="text-xs text-gray-400 italic px-1 py-2">No bug tickets filed yet. Run a QA session to discover bugs.</p>
   }
 
   return (
     <div className="space-y-3">
-      {/* Active agent status banner */}
       <LoopStatusBanner projectId={projectId} />
-
-      {/* Kanban board — CSS grid, fr units resolve against the board container */}
       <div className="overflow-x-auto">
         <div
           ref={boardRef}
@@ -600,7 +761,7 @@ export function TicketsPanel({
               col={col}
               tickets={tickets.filter((t) => t.status === col.status)}
               projectId={projectId}
-              onDrop={col.acceptsDrop ? handleDrop : undefined}
+              onDrop={col.acceptsDrop ? (tid) => handleDrop(tid, tickets, setTickets, projectId, fetchTickets) : undefined}
               onTicketClick={setSelectedTicket}
             />,
             ...(i < COLUMNS.length - 1
@@ -617,26 +778,64 @@ export function TicketsPanel({
           ])}
         </div>
       </div>
-
-      {/* Ticket detail dialog */}
-      {selectedTicket && selectedCol && (
+      {selectedTicket && (
         <TicketDialog
           ticket={selectedTicket}
-          col={selectedCol}
+          col={COLUMNS.find((c) => c.status === selectedTicket.status) ?? COLUMNS[0]}
           projectId={projectId}
           onClose={() => setSelectedTicket(null)}
           onAccept={
             selectedTicket.status === 'needs_review'
-              ? () => handleAccept(selectedTicket)
+              ? () => {
+                  acceptPR(projectId, selectedTicket.id).then(() => { fetchTickets(); onReviewed?.() })
+                  setSelectedTicket(null)
+                }
               : undefined
           }
           onReject={
             selectedTicket.status === 'needs_review'
-              ? () => handleReject(selectedTicket)
+              ? () => {
+                  rejectPR(projectId, selectedTicket.id).then(() => fetchTickets())
+                  setSelectedTicket(null)
+                }
               : undefined
           }
         />
       )}
     </div>
   )
+}
+
+async function handleDrop(
+  ticketId: string,
+  tickets: Ticket[],
+  setTickets: React.Dispatch<React.SetStateAction<Ticket[]>>,
+  projectId: number,
+  refetch: () => void,
+) {
+  const ticket = tickets.find((t) => t.id === ticketId)
+  if (!ticket || ticket.status !== 'pending_confirmation') return
+  setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)))
+  try {
+    const result = await approveTicket(projectId, ticketId)
+    setTickets((prev) =>
+      prev.map((t) => t.id === ticketId ? { ...t, status: 'in_progress', session_id: result.session_id } : t),
+    )
+  } catch {
+    refetch()
+  }
+}
+
+// ── Public component ───────────────────────────────────────────────────────
+
+export function TicketsPanel({
+  projectId,
+  refreshKey,
+  onReviewed,
+}: {
+  projectId: number
+  refreshKey?: number
+  onReviewed?: () => void
+}) {
+  return <TicketsTab projectId={projectId} refreshKey={refreshKey} onReviewed={onReviewed} />
 }

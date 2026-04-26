@@ -16,10 +16,26 @@ export interface ApproveTicketResult {
   status: string
 }
 
+export interface TicketSession {
+  session_id: string
+  status: string
+  fix_attempt: number
+  started_at: string | null
+  completed_at: string | null
+}
+
 export async function listTickets(projectId: number, signal?: AbortSignal): Promise<Ticket[]> {
   return apiFetch<Ticket[]>(`/projects/${projectId}/tickets`, { signal })
 }
 
 export async function approveTicket(projectId: number, ticketId: string): Promise<ApproveTicketResult> {
   return apiFetch<ApproveTicketResult>(`/projects/${projectId}/tickets/${ticketId}/approve`, { method: 'POST' })
+}
+
+export async function getTicketSessions(
+  projectId: number,
+  ticketId: string,
+  signal?: AbortSignal,
+): Promise<TicketSession[]> {
+  return apiFetch<TicketSession[]>(`/projects/${projectId}/tickets/${ticketId}/sessions`, { signal })
 }

@@ -2,6 +2,8 @@ import { apiFetch } from './client'
 
 export interface RunCostEntry {
   run_id: string
+  type?: 'reviewer_run' | 'qa_session'
+  ticket_id?: string | null
   started_at: string | null
   reviewer_cost_usd: number
   qa_cost_usd: number

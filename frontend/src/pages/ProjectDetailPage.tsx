@@ -4,7 +4,7 @@ import { getProject, listRuns, type Project, type AgentRunSummary } from '../api
 import { getConfig, patchConfig, type ProjectConfig } from '../api/config'
 import { createRun } from '../api/runs'
 import { LiveAgentView } from '../components/LiveAgentView'
-import { createQASession } from '../api/qa_sessions'
+import { createQASession, getLatestQASession } from '../api/qa_sessions'
 import { QASessionView } from '../components/QASessionView'
 import { TicketsPanel } from '../components/TicketsPanel'
 import { PastRunViewer } from '../components/PastRunViewer'
@@ -556,14 +556,23 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     const controller = new AbortController()
-    Promise.all([getProject(projectId), listRuns(projectId, controller.signal)])
-      .then(([proj, runs]) => {
+    Promise.all([
+      getProject(projectId),
+      listRuns(projectId, controller.signal),
+      getLatestQASession(projectId, controller.signal),
+    ])
+      .then(([proj, runs, latestQA]) => {
         if (controller.signal.aborted) return
         setProject(proj)
         setPastRuns(runs)
-        // Hydrate with the latest run so the timeline is visible immediately
-        if (runs.length > 0) {
-          setRunId(runs[0].run_id)
+        // Hydrate reviewer timeline with the most recent run
+        if (runs.length > 0) setRunId(runs[0].run_id)
+        // Hydrate QA session card — works even after tab switches or page refresh
+        if (latestQA.session_id) {
+          setQaSessionId(latestQA.session_id)
+          if (latestQA.status && ['done', 'error', 'budget_exceeded'].includes(latestQA.status)) {
+            setQaStatus(latestQA.status)
+          }
         }
       })
       .catch((e) => {

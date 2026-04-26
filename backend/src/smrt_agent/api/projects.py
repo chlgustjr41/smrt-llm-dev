@@ -11,7 +11,6 @@ from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import AgentRunOut, ProjectConfig, ProjectConfigPatch, ProjectCreate, ProjectOut
 from smrt_agent.db.models import AgentRun, Project, QASession
 from smrt_agent.platform_paths import canonicalize
-from smrt_agent.settings import Settings
 
 CONFIG_DEFAULTS = {
     "reviewer_model": "claude-haiku-4-5-20251001",
@@ -31,23 +30,8 @@ async def register_project(
     body: ProjectCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Project:
-    settings = Settings()
-
     # Canonicalize the submitted path
     canonical = canonicalize(body.path)
-
-    # Reject paths outside the allowlist (when allowlist is configured).
-    # Both the input and each root are canonicalized for consistent comparison.
-    if settings.allowed_project_roots:
-        canonical_roots: list[str] = []
-        for root in settings.allowed_project_roots:
-            try:
-                canonical_roots.append(canonicalize(root))
-            except Exception:
-                canonical_roots.append(root)
-        allowed = any(canonical.startswith(root) for root in canonical_roots)
-        if not allowed:
-            raise HTTPException(status_code=400, detail="Path is not in the project root allowlist")
 
     # Require the path to exist. /workspace paths are resolvable inside Docker;
     # Windows-style paths submitted via the file browser are already /workspace/... form.

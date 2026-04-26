@@ -115,6 +115,37 @@ async def _session_task(
         await queue.put({"type": "done", "status": final_status})
 
 
+@router.get("/{project_id}/qa-sessions/latest")
+async def get_latest_qa_session(
+    project_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return the most recent full QA session (ticket_id IS NULL) for a project.
+
+    Used by the Overview tab to hydrate the QA/Test Session card on page load
+    so users don't lose context when switching tabs.
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = await db.execute(
+        select(QASession)
+        .where(QASession.project_id == project_id)
+        .where(QASession.ticket_id.is_(None))
+        .order_by(QASession.started_at.desc())
+        .limit(1)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        return {"session_id": None, "status": None, "started_at": None, "completed_at": None}
+    return {
+        "session_id": session.session_id,
+        "status": session.status,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+    }
+
+
 @router.get("/{project_id}/qa-sessions/{session_id}/events")
 async def get_qa_session_events(
     project_id: int,

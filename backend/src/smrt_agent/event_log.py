@@ -10,6 +10,10 @@ class EventLogger:
     The agent loops call put() on this wrapper. The SSE endpoints read
     directly from the inner queue. This tees events to persistent storage
     without changing the SSE streaming path.
+
+    File I/O is offloaded to a thread via asyncio.to_thread so that the
+    event loop is never blocked — even when the agent emits dozens of
+    text_delta events per second.
     """
 
     def __init__(self, inner: asyncio.Queue, log_path: Path) -> None:
@@ -17,9 +21,12 @@ class EventLogger:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_path = log_path
 
-    async def put(self, item: dict) -> None:
+    def _append(self, line: str) -> None:
         with self._log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(item) + "\n")
+            f.write(line)
+
+    async def put(self, item: dict) -> None:
+        await asyncio.to_thread(self._append, json.dumps(item) + "\n")
         await self._inner.put(item)
 
     def empty(self) -> bool:
