@@ -9,8 +9,12 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasBody = init?.method && !['GET', 'HEAD'].includes(init.method.toUpperCase())
   const resp = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
     ...init,
   })
   if (!resp.ok) {
