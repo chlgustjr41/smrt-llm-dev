@@ -10,9 +10,7 @@ import { TicketsPanel } from '../components/TicketsPanel'
 import { PastRunViewer } from '../components/PastRunViewer'
 import { DocPanel } from '../components/DocPanel'
 import { CostChart } from '../components/CostChart'
-import { HeatmapChart } from '../components/HeatmapChart'
 import { DocScoreChart } from '../components/DocScoreChart'
-import { ProvenancePanel } from '../components/ProvenancePanel'
 import { getTestStatus, type TestStatusEntry } from '../api/stats'
 
 // ── Shared UI primitives ──────────────────────────────────────────────────
@@ -802,19 +800,6 @@ export function ProjectDetailPage() {
           </Card>
         </div>
 
-        <Card>
-          <CardHeader title="Bug-Hunt Heatmap" />
-          <div className="p-5">
-            <HeatmapChart projectId={projectId} />
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Change Provenance" />
-          <div className="p-5">
-            <ProvenancePanel projectId={projectId} />
-          </div>
-        </Card>
       </div>
 
       </>}

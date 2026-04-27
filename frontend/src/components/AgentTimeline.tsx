@@ -79,7 +79,7 @@ const AGENT_META: Record<
 // ── Phase helpers ──────────────────────────────────────────────────────────
 
 function makePhaseLabel(status: string, fixAttempt?: number): string {
-  const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt}` : ''
+  const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt + 1}` : ''
   switch (status) {
     case 'qa_running':    return `QA Agent${attempt}`
     case 'coder_running': return `Coder${attempt}`

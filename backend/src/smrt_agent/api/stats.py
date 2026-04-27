@@ -1,4 +1,4 @@
-"""Analytics stats API: cost breakdown, heatmap, doc-completeness history."""
+"""Analytics stats API: cost breakdown and doc-completeness history."""
 import asyncio
 import json
 from datetime import datetime, timezone
@@ -16,20 +16,26 @@ from smrt_agent.db.models import AgentRun, Project, QASession
 
 router = APIRouter(prefix="/projects", tags=["stats"])
 
-# Cost per million tokens (input, output) by model substring match
-_MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5": (0.80, 4.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-    "claude-opus-4-7": (15.00, 75.00),
-}
-_DEFAULT_PRICING = (3.00, 15.00)  # sonnet fallback
 
-
-def _model_cost_per_mtok(model: str) -> tuple[float, float]:
-    for key, pricing in _MODEL_PRICING.items():
-        if key in model:
-            return pricing
-    return _DEFAULT_PRICING
+def _parse_reviewer_run_cost(runs_dir: Path, run_id: str) -> float:
+    """Read cost_usd from the 'done' event in a reviewer run JSONL log."""
+    log_path = runs_dir / f"{run_id}.jsonl"
+    if not log_path.exists():
+        return 0.0
+    try:
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                if event.get("type") == "done":
+                    return float(event.get("cost_usd") or 0)
+            except (json.JSONDecodeError, ValueError):
+                pass
+    except Exception:
+        pass
+    return 0.0
 
 
 def _parse_session_costs(sessions_dir: Path, session_id: str) -> tuple[float, float]:
@@ -62,13 +68,6 @@ def _parse_session_costs(sessions_dir: Path, session_id: str) -> tuple[float, fl
     return qa_cost, coder_cost
 
 
-_IGNORE_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    ".smrt", "dist", "build", ".pytest_cache", ".mypy_cache",
-}
-_SOURCE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".rs", ".rb", ".c", ".cpp", ".h"}
-
-
 @router.get("/{project_id}/stats/cost")
 async def get_cost_stats(
     project_id: int,
@@ -78,14 +77,6 @@ async def get_cost_stats(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    config_raw = project.config or "{}"
-    try:
-        config_data = json.loads(config_raw)
-    except json.JSONDecodeError:
-        config_data = {}
-    reviewer_model = config_data.get("reviewer_model", "claude-sonnet-4-6")
-    cost_in_r, cost_out_r = _model_cost_per_mtok(reviewer_model)
-
     # ── Reviewer runs ────────────────────────────────────────────────────────
     run_result = await db.execute(
         select(AgentRun)
@@ -94,11 +85,12 @@ async def get_cost_stats(
     )
     runs = run_result.scalars().all()
 
+    runs_dir = Path(project.canonical_path) / ".smrt" / "runs"
+
     data = []
     for run in runs:
-        reviewer_cost = (
-            (run.total_input_tokens / 1_000_000) * cost_in_r
-            + (run.total_output_tokens / 1_000_000) * cost_out_r
+        reviewer_cost = await asyncio.to_thread(
+            _parse_reviewer_run_cost, runs_dir, run.run_id
         )
         data.append({
             "run_id": run.run_id,
@@ -144,57 +136,6 @@ async def get_cost_stats(
     # Sort chronologically so chart bars are left→right in time order
     data.sort(key=lambda x: x["started_at"] or "")
     return {"runs": data}
-
-
-@router.get("/{project_id}/stats/heatmap")
-async def get_heatmap(
-    project_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> dict:
-    project = await db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    project_path = Path(project.canonical_path)
-
-    # Read provenance.jsonl for file → bug count mapping
-    file_bug_counts: dict[str, int] = {}
-    prov_path = project_path / ".smrt" / "provenance.jsonl"
-    if prov_path.exists():
-        for line in prov_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                for f in entry.get("sources_consulted", []):
-                    file_bug_counts[f] = file_bug_counts.get(f, 0) + 1
-            except json.JSONDecodeError:
-                pass
-
-    # Scan source files for LOC (offloaded to thread to avoid blocking the loop)
-    def _scan_files() -> list[dict]:
-        result = []
-        for path in project_path.rglob("*"):
-            if any(part in _IGNORE_DIRS for part in path.parts):
-                continue
-            if not path.is_file() or path.suffix not in _SOURCE_EXTS:
-                continue
-            try:
-                loc = max(len(path.read_text(encoding="utf-8", errors="replace").splitlines()), 1)
-            except Exception:
-                continue
-            rel = str(path.relative_to(project_path)).replace("\\", "/")
-            result.append({
-                "file": rel,
-                "loc": loc,
-                "bugs_resolved": file_bug_counts.get(rel, 0),
-            })
-        result.sort(key=lambda x: x["loc"], reverse=True)
-        return result[:50]
-
-    files = await asyncio.to_thread(_scan_files)
-    return {"files": files}
 
 
 @router.get("/{project_id}/tests")

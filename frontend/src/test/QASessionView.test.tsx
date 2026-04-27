@@ -45,13 +45,12 @@ afterAll(() => server.close())
 
 describe('QASessionView', () => {
   it('renders QA text delta events when thoughts are shown', async () => {
-    const user = userEvent.setup()
     _sseScenario = [
       { type: 'qa_text_delta', text: 'Running tests...' },
       { type: 'done', status: 'done' },
     ]
     render(<QASessionView projectId={1} sessionId="sess-1" />)
-    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
+    // thoughts visible by default (showThoughts starts true)
     await waitFor(() => expect(screen.getByText(/Running tests/)).toBeInTheDocument())
   })
 

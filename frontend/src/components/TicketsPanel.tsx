@@ -325,6 +325,8 @@ function FailureReportBanner({ report }: { report: TicketFailureReport }) {
   )
 }
 
+type DialogTab = 'description' | 'logs'
+
 function TicketDialog({
   ticket,
   col,
@@ -341,7 +343,7 @@ function TicketDialog({
   onReject?: () => void
 }) {
   const hasHistory = Boolean(ticket.session_id)
-  const [showHistory, setShowHistory] = useState(hasHistory)
+  const [activeTab, setActiveTab] = useState<DialogTab>(hasHistory ? 'logs' : 'description')
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -373,47 +375,65 @@ function TicketDialog({
               <span>{col.label}</span>
             </span>
           </div>
-          <div className="flex items-center gap-2 shrink-0 mt-0.5">
-            {hasHistory && (
-              <button
-                onClick={() => setShowHistory((x) => !x)}
-                className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                  showHistory
-                    ? 'border-blue-200 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                {showHistory ? '▲ Hide history' : '▼ Agent history'}
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none"
-            >
-              ×
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 text-xl font-light leading-none shrink-0 mt-0.5"
+          >
+            ×
+          </button>
         </div>
 
         {/* Failure report banner — only for loop-exhausted tickets */}
         {ticket.failure_report && <FailureReportBanner report={ticket.failure_report} />}
 
-        {/* Session history pane */}
-        {showHistory && hasHistory && (
-          <div className="border-b border-gray-100 max-h-72 overflow-y-auto bg-gray-50">
-            <TicketSessionHistory
-              projectId={projectId}
-              ticketId={ticket.id}
-              activeSessionId={isActive ? ticket.session_id : null}
-            />
-          </div>
-        )}
+        {/* Tab bar */}
+        <div className="flex border-b border-gray-100 px-5 gap-4 bg-white">
+          <button
+            type="button"
+            onClick={() => setActiveTab('description')}
+            className={`py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'description'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Description
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('logs')}
+            className={`py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+              activeTab === 'logs'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Agent Logs
+            {isActive && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
+          </button>
+        </div>
 
-        {/* Ticket content */}
-        <div className="flex-1 overflow-y-auto p-5">
-          <div className="prose prose-sm max-w-none text-gray-700 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:bg-gray-50 [&_pre]:border [&_pre]:border-gray-200 [&_pre]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs">
-            <Markdown>{ticket.content}</Markdown>
-          </div>
+        {/* Tab content */}
+        <div className="flex-1 overflow-y-auto">
+          {activeTab === 'description' ? (
+            <div className="p-5">
+              <div className="prose prose-sm max-w-none text-gray-700 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:bg-gray-50 [&_pre]:border [&_pre]:border-gray-200 [&_pre]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs">
+                <Markdown>{ticket.content}</Markdown>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gray-50 min-h-full">
+              {hasHistory ? (
+                <TicketSessionHistory
+                  projectId={projectId}
+                  ticketId={ticket.id}
+                  activeSessionId={isActive ? ticket.session_id : null}
+                />
+              ) : (
+                <p className="text-xs text-gray-400 italic px-4 py-6">No agent sessions recorded yet.</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Accept / Reject — only for PR-ready needs_review (no failure_report) */}
@@ -461,8 +481,13 @@ function TicketCard({
     e.dataTransfer.effectAllowed = 'move'
   }
 
-  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
+  const isCoderRunning = ticket.status === 'in_progress'
+  const isQaRunning = ticket.status === 'qa_review'
+  const isActive = isCoderRunning || isQaRunning
   const hasFailureReport = Boolean(ticket.failure_report)
+
+  // Truncate title to ~40 chars for the card
+  const shortTitle = ticket.title.length > 48 ? ticket.title.slice(0, 46) + '…' : ticket.title
 
   return (
     <div
@@ -475,12 +500,24 @@ function TicketCard({
         <span className={`font-mono text-[11px] shrink-0 mt-0.5 px-1.5 py-0.5 rounded ${col.accentCls}`}>
           {ticket.id}
         </span>
-        <span className="text-sm text-gray-800 leading-snug line-clamp-2 flex-1">{ticket.title}</span>
-        {isActive && (
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0 mt-1" title={ticket.status === 'qa_review' ? 'QA checking…' : 'Coder fixing…'} />
-        )}
+        <span className="text-sm text-gray-800 leading-snug flex-1">{shortTitle}</span>
       </div>
-      {draggable && (
+
+      {/* Agent status badge */}
+      {isCoderRunning && (
+        <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-amber-50 border border-amber-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+          <span className="text-[11px] font-medium text-amber-700">🛠️ Coder fixing…</span>
+        </div>
+      )}
+      {isQaRunning && (
+        <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-violet-50 border border-violet-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse shrink-0" />
+          <span className="text-[11px] font-medium text-violet-700">🔬 QA checking…</span>
+        </div>
+      )}
+
+      {draggable && !isActive && (
         <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to start Coder fix</p>
       )}
       {hasFailureReport && (

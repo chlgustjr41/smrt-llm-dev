@@ -45,21 +45,9 @@ vi.mock('../components/CostChart', () => ({
   ),
 }))
 
-vi.mock('../components/HeatmapChart', () => ({
-  HeatmapChart: ({ projectId }: { projectId: number }) => (
-    <div data-testid="heatmap-chart">HeatmapChart:{projectId}</div>
-  ),
-}))
-
 vi.mock('../components/DocScoreChart', () => ({
   DocScoreChart: ({ projectId }: { projectId: number }) => (
     <div data-testid="doc-score-chart">DocScoreChart:{projectId}</div>
-  ),
-}))
-
-vi.mock('../components/ProvenancePanel', () => ({
-  ProvenancePanel: ({ projectId }: { projectId: number }) => (
-    <div data-testid="provenance-panel">ProvenancePanel:{projectId}</div>
   ),
 }))
 
@@ -79,8 +67,20 @@ const server = setupServer(
   http.post('http://localhost/api/projects/1/qa-sessions', () =>
     HttpResponse.json({ session_id: 'sess-xyz', status: 'pending' }, { status: 202 }),
   ),
+  http.get('http://localhost/api/projects/1/qa-sessions/latest', () =>
+    HttpResponse.json({ session_id: null, status: null, started_at: null, completed_at: null }),
+  ),
   http.get('http://localhost/api/projects/1/tests', () =>
     HttpResponse.json({ version: 1, tests: [] }),
+  ),
+  http.get('http://localhost/api/projects/1/stats/cost', () =>
+    HttpResponse.json({ runs: [] }),
+  ),
+  http.get('http://localhost/api/projects/1/stats/doc-completeness', () =>
+    HttpResponse.json({ history: [] }),
+  ),
+  http.get('http://localhost/api/projects/1/config', () =>
+    HttpResponse.json({ reviewer_model: 'claude-sonnet-4-6', model_coder: 'claude-sonnet-4-6', budget_per_run_usd: 1.0, max_fix_attempts: 3 }),
   ),
 )
 
@@ -207,19 +207,9 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('cost-chart')).toBeInTheDocument())
   })
 
-  it('renders the HeatmapChart dashboard section', async () => {
-    renderPage()
-    await waitFor(() => expect(screen.getByTestId('heatmap-chart')).toBeInTheDocument())
-  })
-
   it('renders the DocScoreChart dashboard section', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('doc-score-chart')).toBeInTheDocument())
-  })
-
-  it('renders the ProvenancePanel dashboard section', async () => {
-    renderPage()
-    await waitFor(() => expect(screen.getByTestId('provenance-panel')).toBeInTheDocument())
   })
 
   it('shows Tests tab in the tab bar', async () => {

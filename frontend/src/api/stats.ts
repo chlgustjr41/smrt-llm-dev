@@ -12,12 +12,6 @@ export interface RunCostEntry {
   reviewer_output_tokens: number
 }
 
-export interface HeatmapEntry {
-  file: string
-  loc: number
-  bugs_resolved: number
-}
-
 export interface DocScoreEntry {
   ts: string
   score: number
@@ -36,17 +30,6 @@ export async function getRunCosts(
     { signal },
   )
   return data.runs
-}
-
-export async function getHeatmap(
-  projectId: number,
-  signal?: AbortSignal,
-): Promise<HeatmapEntry[]> {
-  const data = await apiFetch<{ files: HeatmapEntry[] }>(
-    `/projects/${projectId}/stats/heatmap`,
-    { signal },
-  )
-  return data.files
 }
 
 export async function getDocScoreHistory(
