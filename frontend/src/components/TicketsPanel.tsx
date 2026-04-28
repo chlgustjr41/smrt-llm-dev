@@ -534,37 +534,76 @@ function TicketSessionHistory({
   projectId,
   ticketId,
   activeSessionId,
+  isTicketActive,
 }: {
   projectId: number
   ticketId: string
   activeSessionId: string | null
+  isTicketActive: boolean
 }) {
   const [sessions, setSessions] = useState<TicketSession[] | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(activeSessionId)
+  // Tracks whether the user has explicitly clicked to expand/collapse a session.
+  // Until they do, auto-expand the active (or most recent) session every time
+  // we fetch — this guarantees real-time data hydrates without manual action.
+  const userExpandedRef = useRef(false)
+
+  const fetchSessions = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const s = await getTicketSessions(projectId, ticketId, signal)
+      if (signal?.aborted) return
+      setSessions(s)
+      if (!userExpandedRef.current) {
+        const liveSession = s.find((x) => !x.completed_at)
+        const targetId = activeSessionId ?? liveSession?.session_id ?? s[0]?.session_id ?? null
+        if (targetId) setExpandedId(targetId)
+      }
+    } catch {
+      if (!signal?.aborted) setSessions([])
+    }
+  }, [projectId, ticketId, activeSessionId])
 
   useEffect(() => {
     const ac = new AbortController()
-    getTicketSessions(projectId, ticketId, ac.signal)
-      .then((s) => {
-        setSessions(s)
-        if (activeSessionId) setExpandedId(activeSessionId)
-        else if (s.length > 0) setExpandedId(s[0].session_id)
-      })
-      .catch(() => setSessions([]))
+    fetchSessions(ac.signal)
     return () => ac.abort()
-  }, [projectId, ticketId, activeSessionId])
+  }, [fetchSessions])
+
+  // While the ticket is actively being worked on, poll for newly created
+  // sessions. Covers the race where the dialog opens before the backend has
+  // committed the QASession row, AND the case where ticket.session_id was
+  // null (legacy/orphan) but a real session is running.
+  useEffect(() => {
+    if (!isTicketActive) return
+    // Stop polling once we have at least one session and an active one is found
+    const haveActive = (sessions ?? []).some((s) => !s.completed_at)
+    if (haveActive) return
+    const interval = setInterval(() => fetchSessions(), 2000)
+    return () => clearInterval(interval)
+  }, [isTicketActive, sessions, fetchSessions])
 
   if (sessions === null) return (
     <div className="px-3 py-2 text-xs text-gray-400 animate-pulse">Loading session history…</div>
   )
-  if (sessions.length === 0) return (
-    <div className="px-3 py-2 text-xs text-gray-400 italic">No sessions recorded yet.</div>
-  )
+  if (sessions.length === 0) {
+    return isTicketActive ? (
+      <div className="px-3 py-3 text-xs text-amber-600 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+        Waiting for the agent to start…
+      </div>
+    ) : (
+      <div className="px-3 py-2 text-xs text-gray-400 italic">No sessions recorded yet.</div>
+    )
+  }
 
   return (
     <div className="divide-y divide-gray-100">
       {sessions.map((s, i) => {
-        const isActive = s.session_id === activeSessionId
+        // A session is "live" when the parent ticket is active AND this session
+        // hasn't been marked completed in the DB. Falling back to activeSessionId
+        // alone misses freshly created sessions whose ID hasn't propagated to
+        // listTickets yet (the polling cycle is 5 s).
+        const isActive = isTicketActive && !s.completed_at
         const isOpen = expandedId === s.session_id
 
         return (
@@ -572,7 +611,10 @@ function TicketSessionHistory({
             <button
               type="button"
               className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-50 transition-colors"
-              onClick={() => setExpandedId(isOpen ? null : s.session_id)}
+              onClick={() => {
+                userExpandedRef.current = true
+                setExpandedId(isOpen ? null : s.session_id)
+              }}
             >
               <span className="text-[10px] text-gray-400 w-3 text-center shrink-0">
                 {isOpen ? '▾' : '▸'}
@@ -648,8 +690,13 @@ function TicketDialog({
   onReject?: () => void
 }) {
   const hasHistory = Boolean(ticket.session_id)
+  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
   const showFixSummary = ticket.status === 'needs_review' || ticket.status === 'closed'
-  const defaultTab: DialogTab = showFixSummary ? 'fix-summary' : hasHistory ? 'logs' : 'description'
+  // For active tickets, always default to the Logs tab even when session_id
+  // hasn't been cached yet — TicketSessionHistory will poll until it appears.
+  const defaultTab: DialogTab = showFixSummary
+    ? 'fix-summary'
+    : (hasHistory || isActive) ? 'logs' : 'description'
   const [activeTab, setActiveTab] = useState<DialogTab>(defaultTab)
 
   useEffect(() => {
@@ -657,8 +704,6 @@ function TicketDialog({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
-
-  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
 
   return (
     <div
@@ -752,15 +797,15 @@ function TicketDialog({
           )}
 
           <div className={activeTab !== 'logs' ? 'hidden' : 'bg-gray-50 min-h-full'}>
-            {hasHistory ? (
-              <TicketSessionHistory
-                projectId={projectId}
-                ticketId={ticket.id}
-                activeSessionId={isActive ? ticket.session_id : null}
-              />
-            ) : (
-              <p className="text-xs text-gray-400 italic px-4 py-6">No agent sessions recorded yet.</p>
-            )}
+            {/* Always mount TicketSessionHistory: it queries by ticket_id, so it
+                can find the active session even when the cached ticket.session_id
+                is stale (e.g., dialog opened mid-drag, page refreshed mid-run). */}
+            <TicketSessionHistory
+              projectId={projectId}
+              ticketId={ticket.id}
+              activeSessionId={isActive ? ticket.session_id : null}
+              isTicketActive={isActive}
+            />
           </div>
         </div>
 

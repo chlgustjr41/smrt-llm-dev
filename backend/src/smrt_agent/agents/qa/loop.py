@@ -24,8 +24,14 @@ def _load_system_prompt() -> str:
     return prompt_path.read_text(encoding="utf-8")
 
 
-def _dispatch_tool(name: str, inputs: dict[str, Any], project_path: Path) -> tuple[str, str | None]:
-    """Returns (result_str, ticket_id_if_written)."""
+async def _dispatch_tool(name: str, inputs: dict[str, Any], project_path: Path) -> tuple[str, str | None]:
+    """Returns (result_str, ticket_id_if_written).
+
+    run_pytest is offloaded to a thread because subprocess.run blocks the
+    asyncio loop for the full pytest duration (potentially 60+ seconds with
+    a hung test suite), which would freeze SSE events and make the UI appear
+    stuck.
+    """
     ticket_id = None
     try:
         if name == "list_files":
@@ -35,7 +41,7 @@ def _dispatch_tool(name: str, inputs: dict[str, Any], project_path: Path) -> tup
         elif name == "write_test_file":
             result = write_test_file(project_path, inputs["filename"], inputs["content"])
         elif name == "run_pytest":
-            result = run_pytest(project_path)
+            result = await asyncio.to_thread(run_pytest, project_path)
         elif name == "write_bug_ticket":
             ticket_id = write_bug_ticket(
                 project_path, inputs["title"], inputs["description"], inputs["test_output"]
@@ -139,7 +145,7 @@ async def run_qa_agent(
                         "input": block.input,
                         "ts": _ts(),
                     })
-                    result, ticket_id = _dispatch_tool(block.name, block.input, project_path)
+                    result, ticket_id = await _dispatch_tool(block.name, block.input, project_path)
                     if ticket_id:
                         last_ticket_id = ticket_id
                     await queue.put({
