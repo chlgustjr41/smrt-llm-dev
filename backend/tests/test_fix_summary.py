@@ -155,3 +155,74 @@ def test_load_events_from_jsonl_skips_malformed_lines(tmp_path):
 
 def test_load_events_returns_empty_when_log_missing(tmp_path):
     assert load_events_from_jsonl(tmp_path, "nonexistent-session") == []
+
+
+def test_build_fix_summary_captures_qa_final_summary():
+    """The qa_final_summary event written by `_get_qa_final_summary` must
+    flow through build_fix_summary_from_events into the persisted summary
+    so the UI can render it as the headline narrative."""
+    events = [
+        {"type": "session_status", "status": "coder_running", "fix_attempt": 0, "ts": "2026-04-28T10:00:00Z"},
+        {"type": "session_status", "status": "qa_checking", "fix_attempt": 0, "ts": "2026-04-28T10:00:05Z"},
+        {"type": "recheck_output", "output": "1 passed in 0.5s"},
+        {"type": "pr_ready", "ticket_id": "T-7", "session_id": "S-7"},
+        {"type": "session_status", "status": "qa_summarizing", "ts": "2026-04-28T10:00:10Z"},
+        {"type": "qa_text_delta", "text": "## What the bug was\nIt did the wrong thing. ", "agent": "qa"},
+        {
+            "type": "qa_final_summary",
+            "ticket_id": "T-7",
+            "session_id": "S-7",
+            "summary": "## What the bug was\nIt did the wrong thing.\n\n## What changed\n- Fixed the predicate.",
+            "final_status": "done",
+        },
+        {"type": "session_status", "status": "done"},
+    ]
+    summary = build_fix_summary_from_events(
+        events, ticket_id="T-7", session_id="S-7", final_status="done"
+    )
+    assert summary["qa_final_summary"] is not None
+    assert "## What the bug was" in summary["qa_final_summary"]
+    assert "## What changed" in summary["qa_final_summary"]
+    assert "Fixed the predicate" in summary["qa_final_summary"]
+
+
+def test_build_fix_summary_qa_final_summary_takes_last_event():
+    """If multiple qa_final_summary events end up in the log (shouldn't
+    normally happen but possible if the loop is re-entered), the last
+    non-empty one wins."""
+    events = [
+        {"type": "qa_final_summary", "summary": "first attempt summary"},
+        {"type": "qa_final_summary", "summary": "second attempt summary"},
+    ]
+    summary = build_fix_summary_from_events(
+        events, ticket_id="T-x", session_id="S-x", final_status="done"
+    )
+    assert summary["qa_final_summary"] == "second attempt summary"
+
+
+def test_build_fix_summary_qa_final_summary_skips_empty():
+    """An empty/whitespace summary (e.g. from a failed LLM call) should be
+    treated as absent so the UI doesn't render an empty headline card."""
+    events = [
+        {"type": "qa_final_summary", "summary": ""},
+        {"type": "qa_final_summary", "summary": "   \n\t  "},
+    ]
+    summary = build_fix_summary_from_events(
+        events, ticket_id="T-x", session_id="S-x", final_status="done"
+    )
+    assert summary["qa_final_summary"] is None
+
+
+def test_build_fix_summary_qa_final_summary_is_none_when_event_absent():
+    """Pre-existing sessions that ran before the qa_final_summary event was
+    introduced should still produce a valid summary dict — qa_final_summary
+    just defaults to None."""
+    events = [
+        {"type": "session_status", "status": "coder_running"},
+        {"type": "recheck_output", "output": "1 passed"},
+    ]
+    summary = build_fix_summary_from_events(
+        events, ticket_id="T-x", session_id="S-x", final_status="done"
+    )
+    assert summary["qa_final_summary"] is None
+    assert summary["recheck_output"] == "1 passed"

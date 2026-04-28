@@ -153,15 +153,16 @@ export function ExpandableLiveThought({ text }: { text: string }) {
 function makePhaseLabel(status: string, fixAttempt?: number): string {
   const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt + 1}` : ''
   switch (status) {
-    case 'qa_running':    return `QA Agent${attempt}`
-    case 'qa_advising':   return `QA Advisor${attempt}`
-    case 'qa_checking':   return `QA Verify${attempt}`
-    case 'coder_running': return `Coder${attempt}`
-    case 'hitl_waiting':  return 'Awaiting Approval'
-    case 'done':          return 'Complete'
-    case 'error':         return 'Error'
-    case 'skipped':       return 'Skipped'
-    default:              return status
+    case 'qa_running':     return `QA Agent${attempt}`
+    case 'qa_advising':    return `QA Advisor${attempt}`
+    case 'qa_summarizing': return 'QA Final Summary'
+    case 'qa_checking':    return `QA Verify${attempt}`
+    case 'coder_running':  return `Coder${attempt}`
+    case 'hitl_waiting':   return 'Awaiting Approval'
+    case 'done':           return 'Complete'
+    case 'error':          return 'Error'
+    case 'skipped':        return 'Skipped'
+    default:               return status
   }
 }
 
@@ -200,26 +201,6 @@ function makePhase(
     rejectionEvent: null,
     errorEvent: null,
     pytestRunning: false,
-  }
-}
-
-function makePhase(
-  id: string,
-  label: string,
-  agentType: string,
-  startTs?: string,
-): AgentPhase {
-  return {
-    id,
-    label,
-    agentType,
-    startTs,
-    textEvents: [],
-    textSegments: [],
-    toolPairs: [],
-    recheckEvent: null,
-    rejectionEvent: null,
-    errorEvent: null,
   }
 }
 

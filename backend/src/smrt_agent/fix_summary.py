@@ -88,6 +88,7 @@ def build_fix_summary_from_events(
     changes: list[dict] = []
     pending_text = ""
     qa_early_exit: str | None = None
+    qa_final_summary: str | None = None
     recheck_output: str | None = None
     recommendation: str | None = None
     analysis: str | None = None
@@ -114,6 +115,13 @@ def build_fix_summary_from_events(
             pending_text = ""
         elif t == "qa_early_exit":
             qa_early_exit = ev.get("reasoning")
+        elif t == "qa_final_summary":
+            # The QA's compiled narrative — the headline of the persisted
+            # Fix Summary. Always take the LAST one if multiple exist (the
+            # final terminal pass wins over any earlier ones).
+            summary_text = ev.get("summary")
+            if isinstance(summary_text, str) and summary_text.strip():
+                qa_final_summary = summary_text
         elif t == "recheck_output":
             # Take the LAST recheck — that's what the loop ended on.
             recheck_output = ev.get("output")
@@ -131,6 +139,7 @@ def build_fix_summary_from_events(
         "recommendation": recommendation,
         "analysis": analysis,
         "qa_early_exit": qa_early_exit,
+        "qa_final_summary": qa_final_summary,
         "recheck_output": recheck_output,
         "changes": changes,
         "completed_at": datetime.now(timezone.utc).isoformat(),

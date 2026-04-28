@@ -49,6 +49,11 @@ export interface FixSummary {
   recommendation: string | null
   analysis: string | null
   qa_early_exit: string | null
+  /** QA-written compiled narrative — the headline of the persisted summary.
+   *  Always populated for any ticket that completed a QA→Coder loop with a
+   *  QA model configured. Null only when no QA model was available or the
+   *  final-summary LLM call failed. */
+  qa_final_summary: string | null
   recheck_output: string | null
   changes: FixSummaryChange[]
   completed_at: string

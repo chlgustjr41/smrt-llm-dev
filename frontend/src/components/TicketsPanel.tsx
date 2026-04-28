@@ -187,6 +187,7 @@ function FixSummaryTab({
   const [changes, setChanges] = useState<FileChange[]>([])
   const [recheckOutput, setRecheckOutput] = useState<string | null>(null)
   const [qaEarlyExit, setQaEarlyExit] = useState<string | null>(null)
+  const [qaFinalSummary, setQaFinalSummary] = useState<string | null>(null)
   const [finalStatus, setFinalStatus] = useState<string | null>(null)
   const [completedAt, setCompletedAt] = useState<string | null>(null)
   const [source, setSource] = useState<'persisted' | 'reconstructed' | null>(null)
@@ -210,6 +211,7 @@ function FixSummaryTab({
           })))
           setRecheckOutput(persisted.recheck_output)
           setQaEarlyExit(persisted.qa_early_exit)
+          setQaFinalSummary(persisted.qa_final_summary)
           setFinalStatus(persisted.final_status)
           setCompletedAt(persisted.completed_at)
           setSource('persisted')
@@ -233,6 +235,12 @@ function FixSummaryTab({
           if (rc) setRecheckOutput(rc.output ?? null)
           const earlyExit = events.find((e) => e.type === 'qa_early_exit')
           if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA satisfied.')
+          // Reconstruct the QA narrative from the last qa_final_summary event
+          // when no persisted summary file exists yet (e.g. older sessions).
+          const fs = [...events].reverse().find((e) => e.type === 'qa_final_summary')
+          if (fs && typeof fs.summary === 'string' && fs.summary.trim()) {
+            setQaFinalSummary(fs.summary)
+          }
           setSource('reconstructed')
           setLoading(false)
         }
@@ -256,7 +264,7 @@ function FixSummaryTab({
   // No persisted summary AND no reconstructed events — show a friendly empty
   // state. This is the normal state for tickets that haven't entered the fix
   // loop yet (e.g. fresh pending_confirmation).
-  if (changes.length === 0 && !recheckOutput && !qaEarlyExit && !finalStatus) {
+  if (changes.length === 0 && !recheckOutput && !qaEarlyExit && !qaFinalSummary && !finalStatus) {
     return (
       <div className="px-5 py-8 text-sm text-gray-400 italic text-center">
         No fix session has been recorded for this ticket yet. Drag the ticket
@@ -301,6 +309,24 @@ function FixSummaryTab({
   return (
     <div className="p-5 space-y-4">
       {headerBanner}
+
+      {/* QA Final Summary — the headline of the Fix Summary tab. This is the
+          QA-written narrative compiled at the end of every fix loop (success
+          or failure). It belongs at the very top because it's the "what
+          should I know about this ticket?" answer for any reviewer. */}
+      {qaFinalSummary && (
+        <div className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-violet-500">🧠</span>
+            <p className="text-xs font-semibold text-violet-800 uppercase tracking-wide">
+              QA Final Summary
+            </p>
+          </div>
+          <div className="prose prose-sm max-w-none text-sm text-gray-800 leading-relaxed [&_h1]:text-base [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:font-semibold [&_h2]:text-violet-900 [&_h3]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_code]:bg-white/70 [&_code]:px-1 [&_code]:rounded [&_code]:text-[12px] [&_pre]:bg-white/80 [&_pre]:border [&_pre]:border-violet-200 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-violet-300 [&_th]:bg-white/70 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-violet-200 [&_td]:px-2 [&_td]:py-1">
+            <GfmMarkdown>{qaFinalSummary}</GfmMarkdown>
+          </div>
+        </div>
+      )}
 
       {/* QA early exit note */}
       {qaEarlyExit && (
@@ -813,6 +839,12 @@ function TicketDialog({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // True while the QA→Coder loop is still working on this ticket. Used to
+  // show the pulsing "active" dot in the dialog header and the live indicator
+  // on the Agent Logs tab. Declared here so both the header span and the tab
+  // bar can reference it.
+  const isActive = ticket.status === 'in_progress' || ticket.status === 'qa_review'
 
   return (
     <div
