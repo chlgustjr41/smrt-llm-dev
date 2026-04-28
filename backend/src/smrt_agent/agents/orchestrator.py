@@ -295,7 +295,19 @@ async def run_ticket_fix_session(
             "ts": _ts(),
         })
 
-        pytest_output = run_pytest(project_path)
+        # Pytest must run in a thread — synchronous subprocess.run blocks the
+        # asyncio loop for the whole timeout period, freezing SSE/JSONL writes
+        # and making the UI appear stuck on "Awaiting activity…" until pytest
+        # either completes or times out (potentially 60–120s).
+        await queue.put({"type": "pytest_running", "phase": "pre_coder", "ts": _ts()})
+        pytest_output = await asyncio.to_thread(run_pytest, project_path)
+        await queue.put({
+            "type": "pytest_done",
+            "phase": "pre_coder",
+            "summary": pytest_output[:500],
+            "ts": _ts(),
+        })
+
         await run_coder_agent(
             project_path=project_path,
             llm_client=llm_client,
@@ -321,7 +333,8 @@ async def run_ticket_fix_session(
             "ts": _ts(),
         })
 
-        recheck_output = run_pytest(project_path)
+        await queue.put({"type": "pytest_running", "phase": "qa_verify", "ts": _ts()})
+        recheck_output = await asyncio.to_thread(run_pytest, project_path)
         recheck_outputs.append(recheck_output)
         await queue.put({
             "type": "recheck_output",

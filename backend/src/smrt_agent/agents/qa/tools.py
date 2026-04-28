@@ -26,21 +26,42 @@ def write_test_file(project_path: Path, filename: str, content: str) -> str:
     return f"Wrote {len(content)} bytes to .smrt/tests/{filename}"
 
 
-def run_pytest(project_path: Path) -> str:
-    """Run pytest in .smrt/tests/. Returns raw pytest output (stdout + stderr)."""
+def run_pytest(project_path: Path, timeout_seconds: int = 120) -> str:
+    """Run pytest in .smrt/tests/. Returns raw pytest output (stdout + stderr).
+
+    Catches TimeoutExpired so callers never crash on a hung test suite — the
+    timeout message is returned as part of the output, which lets the Coder
+    agent see what happened and still attempt a fix. Source-code infinite
+    loops in the tested package are the most common trigger for this path.
+    """
     tests_dir = project_path / ".smrt" / "tests"
     if not tests_dir.exists() or not list(tests_dir.glob("test_*.py")):
         return "No test files found in .smrt/tests/"
     env = {**os.environ, "PYTHONPATH": str(project_path)}
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests_dir), "-v", "--tb=short"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(project_path),
-        env=env,
-    )
-    return result.stdout + result.stderr
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(tests_dir), "-v", "--tb=short"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=str(project_path),
+            env=env,
+        )
+        return result.stdout + result.stderr
+    except subprocess.TimeoutExpired as exc:
+        partial = ""
+        if exc.stdout:
+            partial += exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout
+        if exc.stderr:
+            partial += exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        return (
+            f"PYTEST TIMEOUT: tests did not finish within {timeout_seconds}s. "
+            f"This usually means the source code under test has an infinite loop "
+            f"or is blocking on I/O. The fix should address whatever is hanging.\n"
+            f"--- partial output ---\n{partial}"
+        )
+    except Exception as exc:
+        return f"PYTEST ERROR: {exc}"
 
 
 def collect_coverage(project_path: Path) -> dict | None:
