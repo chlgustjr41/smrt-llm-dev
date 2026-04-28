@@ -22,6 +22,8 @@ export interface AgentEvent {
   cost_usd?: number
   budget_usd?: number
   reasoning?: string
+  phase?: string
+  summary?: string
 }
 
 interface ToolCallPair {
@@ -45,6 +47,7 @@ interface AgentPhase {
   recheckEvent: AgentEvent | null
   rejectionEvent: AgentEvent | null
   errorEvent: AgentEvent | null
+  pytestRunning: boolean
 }
 
 // ── Agent brand colours ────────────────────────────────────────────────────
@@ -196,6 +199,27 @@ function makePhase(
     recheckEvent: null,
     rejectionEvent: null,
     errorEvent: null,
+    pytestRunning: false,
+  }
+}
+
+function makePhase(
+  id: string,
+  label: string,
+  agentType: string,
+  startTs?: string,
+): AgentPhase {
+  return {
+    id,
+    label,
+    agentType,
+    startTs,
+    textEvents: [],
+    textSegments: [],
+    toolPairs: [],
+    recheckEvent: null,
+    rejectionEvent: null,
+    errorEvent: null,
   }
 }
 
@@ -249,6 +273,10 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
           event.ts,
         )
       }
+    } else if (event.type === 'pytest_running') {
+      current.pytestRunning = true
+    } else if (event.type === 'pytest_done') {
+      current.pytestRunning = false
     } else if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(event.type)) {
       current.textEvents.push(event)
       pendingText += event.text ?? ''
@@ -565,7 +593,9 @@ function PhaseSection({
             !phase.recheckEvent &&
             !phase.errorEvent && (
               <p className="text-xs text-gray-400 italic py-1">
-                {phase.startTs
+                {phase.pytestRunning
+                  ? '🧪 Running pytest… (this may take 30–60 s on large suites)'
+                  : phase.startTs
                   ? (phase.label.includes('Verify') ? '🧪 Running tests…' : 'Awaiting activity…')
                   : 'No tool activity recorded.'}
               </p>
