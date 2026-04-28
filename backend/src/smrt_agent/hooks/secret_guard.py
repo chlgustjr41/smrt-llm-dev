@@ -71,10 +71,6 @@ _SUBPATH_DENY: tuple[str, ...] = (
     ".kube/config",
 )
 
-# Exception: always allow paths under this prefix even if gitignored
-_GITIGNORE_EXCEPTION_PREFIX = "tests/generated/"
-
-
 def _normalise(file_path: str) -> str:
     """Return the path with forward slashes, no leading slash."""
     return file_path.replace("\\", "/").lstrip("/")
@@ -116,23 +112,23 @@ def _check_always_deny(norm_path: str) -> str | None:
     return None
 
 
-def _load_gitignore_specs(project_path: Path) -> "list[tuple[str, object]]":
-    """Walk project_path and collect (base_dir_prefix, PathSpec) pairs.
+def _load_agentignore_specs(project_path: Path) -> "list[tuple[str, object]]":
+    """Walk project_path and collect (base_dir_prefix, PathSpec) pairs from .agentignore files.
 
-    Returns an empty list if pathspec is not available.
+    Returns an empty list if pathspec is not available or no .agentignore files exist.
     """
     if not _PATHSPEC_AVAILABLE:
         return []
 
     specs: list[tuple[str, object]] = []
 
-    for gi_file in sorted(project_path.rglob(".gitignore")):
+    for ai_file in sorted(project_path.rglob(".agentignore")):
         try:
-            lines = gi_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = ai_file.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         try:
-            rel_dir = gi_file.parent.relative_to(project_path)
+            rel_dir = ai_file.parent.relative_to(project_path)
         except ValueError:
             continue
         prefix = str(rel_dir).replace("\\", "/")
@@ -144,21 +140,16 @@ def _load_gitignore_specs(project_path: Path) -> "list[tuple[str, object]]":
     return specs
 
 
-def _check_gitignore(
+def _check_agentignore(
     specs: "list[tuple[str, object]]",
     norm_path: str,
 ) -> str | None:
-    """Return a denial reason if norm_path is matched by any loaded gitignore spec."""
+    """Return a denial reason if norm_path is matched by any loaded .agentignore spec."""
     if not specs:
-        return None
-
-    # Exception: always allow tests/generated/ paths
-    if norm_path.startswith(_GITIGNORE_EXCEPTION_PREFIX):
         return None
 
     for base_prefix, spec in specs:
         if base_prefix:
-            # Only apply specs from subdirectories to paths beneath that directory
             if not norm_path.startswith(base_prefix + "/"):
                 continue
             relative_to_spec = norm_path[len(base_prefix) + 1 :]
@@ -166,7 +157,7 @@ def _check_gitignore(
             relative_to_spec = norm_path
 
         if spec.match_file(relative_to_spec):  # type: ignore[union-attr]
-            return f"path '{norm_path}' is matched by .gitignore"
+            return f"path '{norm_path}' is matched by .agentignore"
 
     return None
 
@@ -180,9 +171,9 @@ def check_path(project_path: Path, file_path: str) -> str | None:
     if reason:
         return reason
 
-    # 2. Gitignore check
-    specs = _load_gitignore_specs(project_path)
-    reason = _check_gitignore(specs, norm)
+    # 2. .agentignore check (project-specific deny list for secrets)
+    specs = _load_agentignore_specs(project_path)
+    reason = _check_agentignore(specs, norm)
     if reason:
         return reason
 

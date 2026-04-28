@@ -67,7 +67,8 @@ async def create_user(body: UserCreate):
         "password_hash": f"hashed:{body.password}",
     }
     _users[_user_seq] = user
-    return user
+    # Bug fix: do not return password_hash in the response
+    return {"id": user["id"], "email": user["email"]}
 
 
 @app.get("/users")
@@ -90,7 +91,8 @@ async def create_todo(body: TodoCreate):
         "done": False,
     }
 
-    _save_todo(todo)  # persist the new todo
+    # Bug fix: must await the async _save_todo coroutine so the todo is persisted
+    await _save_todo(todo)
     return todo
 
 
@@ -117,11 +119,11 @@ async def delete_todo(todo_id: int, caller_id: int = 0):
     if todo is None:
         raise HTTPException(status_code=404, detail="Todo not found")
 
-    # Only the owner may delete their todo
-    del _todos[todo_id]
-
+    # Bug fix: check ownership BEFORE deleting; original code deleted first then checked
     if todo["owner_id"] != caller_id:
         raise HTTPException(status_code=403, detail="Not your todo")
+
+    del _todos[todo_id]
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
@@ -134,10 +136,9 @@ async def complete_todo(todo_id: int):
         raise HTTPException(status_code=404, detail="Todo not found")
     todo["done"] = True
 
-    # Increment the global completion counter
-    current = _completed_count
-    await asyncio.sleep(0)
-    _completed_count = current + 1
+    # Bug fix: increment atomically without yielding between read and write;
+    # the original read-yield-write pattern loses increments under concurrency
+    _completed_count += 1
 
     return {"todo_id": todo_id, "completed_count": _completed_count}
 

@@ -8,6 +8,7 @@ export interface ProjectConfig {
   max_questions_per_attempt: number
   scheduler_cadence: string
   thought_process_mode: boolean
+  use_local_llm: boolean
 }
 
 export function getConfig(projectId: number): Promise<ProjectConfig> {

@@ -22,17 +22,14 @@ async def list_docs(
     project_path = Path(project.canonical_path)
     files: list[dict] = []
 
-    for directory, label in [
-        (project_path / "docs", "github"),
-        (project_path / "wiki", "obsidian"),
-    ]:
-        if directory.exists():
-            for f in sorted(directory.rglob("*.md")):
-                files.append(
-                    {
-                        "backend": label,
-                        "path": str(f.relative_to(project_path)).replace("\\", "/"),
-                    }
-                )
+    docs_dir = project_path / "docs"
+    if docs_dir.exists():
+        for f in sorted(docs_dir.rglob("*.md")):
+            files.append(
+                {
+                    "backend": "obsidian",
+                    "path": str(f.relative_to(project_path)).replace("\\", "/"),
+                }
+            )
 
     return {"files": files}

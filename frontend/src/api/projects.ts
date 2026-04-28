@@ -37,6 +37,6 @@ export interface AgentRunSummary {
   completed_at: string | null
 }
 
-export function listRuns(projectId: number): Promise<AgentRunSummary[]> {
-  return apiFetch<AgentRunSummary[]>(`/projects/${projectId}/runs`)
+export function listRuns(projectId: number, signal?: AbortSignal): Promise<AgentRunSummary[]> {
+  return apiFetch<AgentRunSummary[]>(`/projects/${projectId}/runs`, { signal })
 }

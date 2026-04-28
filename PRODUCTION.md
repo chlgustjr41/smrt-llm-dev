@@ -2,12 +2,104 @@
 
 **Project codename:** `smrt-agent`
 **Target:** SMRT Systems hiring challenge — an AI-driven dev orchestrator for Python FastAPI codebases
-**Spec version:** v1.0 (iteration 1)
+**Spec version:** v1.0 (iteration 1) — original build spec
+**As-built version:** v1.1 (Phase 7 polish branch, 2026-04-27) — see [§0 As-Built Addendum](#0-as-built-addendum)
 **Companion documents:**
+- `README.md` — user-facing quickstart, fixture catalog, testing scenarios
 - `RESEARCH.md` — academic foundations (Agentless, CoverUp, RepoAgent, Ask-or-Assume, OpenHands, RepairAgent, Meta ACH)
 - `NEXT_ITERATION.md` — deferred scope and the v2 roadmap
 
 This spec is written to be consumed by Claude Code. Every section states *what* to build and *why*. Where the "why" ties to a research result, the paper is named inline so you can consult `RESEARCH.md` when implementing.
+
+> **Reading order.** §0 (As-Built Addendum) is authoritative for current behavior. §1–14 below preserve the original v1.0 spec — any divergence between the spec and the running code is captured in §0. Treat §0 as a *delta* layered on top of the original spec.
+
+---
+
+## 0. As-Built Addendum (v1.1, 2026-04-27)
+
+The shipping codebase has drifted from the v1.0 spec in nine concrete ways. Each change below names *what* changed and *why*, so a future implementer can either re-align the code to the spec or update the spec to match.
+
+### 0.1 Documentation backend collapsed to Obsidian-only
+
+| Spec (§6)                                        | As-built                                     |
+|--------------------------------------------------|----------------------------------------------|
+| Two parallel writers: GitHub `docs/` + Obsidian `wiki/` | Single `ObsidianBackend` writes to `docs/` only |
+
+`backend/src/smrt_agent/docs/service.py::generate_docs()` instantiates only `ObsidianBackend`. `GitHubBackend` and `JiraBackend`/`ConfluenceBackend` classes still exist in `backends.py` for v2 reuse but are not wired up. Generated files include Obsidian frontmatter (`type:`, `tags:`, `updated:`) inside the `docs/` tree so the same directory works as both a GitHub-readable docs folder and an Obsidian vault root. The `wiki/` directory has been removed from both fixtures.
+
+**Why:** users were confused by two divergent doc trees with the same content. Obsidian frontmatter is silently ignored by GitHub's Markdown renderer, so a single tree satisfies both surfaces.
+
+### 0.2 Default models changed to Haiku 4.5
+
+| Spec (§2)                            | As-built (`.env.example`)              |
+|--------------------------------------|----------------------------------------|
+| Reviewer = Opus 4.7, QA = Sonnet 4.6 | Reviewer = Haiku 4.5, QA = Haiku 4.5   |
+| Coder = Sonnet 4.6                   | Coder = Sonnet 4.6 (unchanged)         |
+
+**Why:** Haiku 4.5 ships strong tool-use and is ~6× cheaper than Opus, which kept the default per-run budget hitting the cap before the loop completed. Coder stays on Sonnet because patch quality is the bottleneck for human-acceptance rate.
+
+### 0.3 Per-ticket budget added; defaults raised
+
+A new `SMRT_BUDGET_PER_TICKET_USD` ceiling (default `$2.00`) gates each QA-Coder ticket loop independently from the per-run cap on Init Audit / Find Bugs. Daily cap raised from `$10` to `$40` to accommodate multi-ticket sessions.
+
+**Why:** the original single per-run cap conflated discovery with fixing. A ticket loop can legitimately spend more than a one-shot audit because it iterates.
+
+### 0.4 Interactive budget-pause gateway
+
+Implemented in `backend/src/smrt_agent/agents/budget_gateway.py`. When any agent crosses its budget ceiling:
+
+1. Agent emits `budget_pause` SSE event with `cost_usd`, `budget_usd`, token totals.
+2. Gateway awaits a decision via `asyncio.Future` for up to **120 s** (`_PAUSE_TIMEOUT_S`).
+3. UI dialog offers **Continue (+20% grace)** or **Terminate**. The frontend POSTs `/projects/{id}/qa-sessions/{sid}/budget-decision` or `/projects/{id}/tickets/{tid}/budget-decision` to call `resolve()`.
+4. On `continue`: budget extended to `cost + (current_budget × 0.20)`, loop resumes, `budget_continue` SSE emitted.
+5. On `terminate` or timeout: `budget_exceeded` SSE emitted, run ends.
+
+**Why:** spec §8.3 mandated a hard halt on budget exceed. In practice, runs were often within a few cents of completing and a hard halt wasted the entire spend. The grace-extension dialog keeps the human in control while preventing trivial cliff-edge failures.
+
+### 0.5 Per-ticket QA-Coder loop with a dialog-based history
+
+The original §4 design fired QA discovery + Coder fixes as a single batch keyed off project state. The shipped UX is **per-ticket**:
+
+- The Tickets tab is a 5-column kanban: `Pending Confirmation → In Progress → QA Review → Needs Review → Closed`.
+- Drag a ticket to *In Progress* → backend launches a single ticket session (`POST /tickets/{id}/approve`).
+- Each ticket has its own SSE stream and its own AgentTimeline.
+- Click any card → dialog with three tabs: **History** (every prior session for this ticket), **Events** (current session SSE replay), **Diff** (file-level patch preview).
+
+**Why:** users wanted to fix one bug at a time and see exactly what each fix touched, rather than approve a batch and discover a mass merge had been prepared.
+
+### 0.6 Server-Sent Events replaced polling
+
+All live status flows (AgentTimeline, ticket status, run status, QA session state) use Server-Sent Events:
+
+- Backend: `event_log.py` writes JSONL append-only logs; `api/qa_sessions.py::stream_qa_session` and analogous endpoints replay-then-tail those files via `text/event-stream`.
+- Shared `session_registry.py` unifies the asyncio `Queue` per session so the SSE response and the agent loop write to the same stream.
+- Frontend uses native `EventSource`, not polling.
+
+**Why:** polling at 2 s for live agent thoughts produced visible jitter and eight-figure DB reads on long sessions. SSE drops backend load to zero between events.
+
+### 0.7 `.agentignore` is the path-deny mechanism (not just `.gitignore`)
+
+Spec §3.4 named `.gitignore` as the deny source. The shipped `secret_guard_hook` reads **both** `.gitignore` and a separate `.agentignore` file. The fixture `BUGS.md` answer keys are in `.agentignore` (not `.gitignore`) because evaluators want them visible in the repo while keeping them invisible to the agents.
+
+**Why:** the spec conflated two needs — keeping secrets out of agent context (gitignore) and keeping evaluator answers out of agent context (agentignore). They want different opt-in semantics.
+
+### 0.8 Bug heatmap, cost-per-line UI dropped
+
+Spec §7.4 listed a "Bug heatmap" dashboard (defect density per file) and inline cost displays inside agent thought streams. Both were removed in commit `5b7c1e1` after user testing — the heatmap rarely correlated with actual fix priority, and inline cost numbers turned out to be inaccurate during streaming (cost is finalized only at run completion).
+
+**Why:** the data wasn't trustworthy enough to ship. Cost still lives in the per-run / per-ticket totals on the Overview tab where the numbers are final.
+
+### 0.9 Local LLM (LM Studio / OpenAI-compatible) supported
+
+`backend/src/smrt_agent/llm.py` routes to either Anthropic or any OpenAI-compatible HTTP endpoint based on `USE_LOCAL_LLM`. When local is selected, `LOCAL_LLM_BASE_URL` (default `http://host.docker.internal:1234/v1`) and `LOCAL_LLM_MODEL` are used for *all* agents — the per-agent model overrides are ignored.
+
+**Why:** evaluators on air-gapped networks needed a way to run the system without leaking source code to a cloud provider. LM Studio was the lowest-friction local option and its server is OpenAI-compatible out of the box.
+
+### 0.10 Eval fixture catalog grew to two
+
+Original `eval-fixtures/` shipped only `todo-api`. The shipped repo also contains `eval-fixtures/inventory-api/` — a multi-router fixture (~250 LOC) targeting cross-file reasoning bugs (variable swap, off-by-one threshold, soft-delete predicate, etc.). See `README.md` for the comparison and the three named testing scenarios.
+
+**Why:** `todo-api` is single-file, so the agents converged in one or two reads. `inventory-api` forces them to read across `routers/`, `services/`, and `schemas.py`, which is what production codebases look like.
 
 ---
 

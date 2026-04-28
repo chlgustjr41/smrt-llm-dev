@@ -1,9 +1,5 @@
-# Hides the answer key from the SMRT Agent's secret_guard_hook.
-# This file is intentionally committed to the meta-repo.
-BUGS.md
-
 # Runtime
 __pycache__/
 *.pyc
 .venv/
-.smrt/
+

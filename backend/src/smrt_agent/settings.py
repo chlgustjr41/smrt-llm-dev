@@ -1,17 +1,48 @@
+from pathlib import Path
+
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+def _find_env_file() -> Path | None:
+    """Walk up from this file's location to find the nearest .env file.
+
+    When running locally the source tree sits inside the repo root which has .env.
+    When running inside Docker the source is at /app/src/... with no .env nearby,
+    so this returns None and dotenv_settings contributes nothing — Docker's env_file:
+    injection (which lands as ordinary OS env vars) takes over instead.
+    """
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / ".env"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # env_file is intentionally not set here; it is resolved dynamically in
+        # settings_customise_sources so that tests can monkeypatch _find_env_file.
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
 
-    # Required
-    anthropic_api_key: str = Field(..., description="Anthropic API key")
+    # Required when not using local LLM
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
+
+    # Local LLM (LM Studio or any OpenAI-compatible server)
+    # Set USE_LOCAL_LLM=true to prefer local over Anthropic regardless of whether
+    # a key is present (most local servers don't require auth).
+    use_local_llm: bool = Field(default=False, alias="use_local_llm")
+    local_llm_api_key: str = Field(default="", alias="local_llm_api_key")
+    local_llm_base_url: str = Field(default="http://localhost:1234/v1", alias="local_llm_base_url")
+    local_llm_model: str = Field(default="local-model", alias="local_llm_model")
 
     # Bind address
     bind_host: str = Field(default="127.0.0.1", alias="smrt_bind_host")
@@ -20,12 +51,13 @@ class Settings(BaseSettings):
 
     # Budget guardrails
     budget_per_run_usd: float = Field(default=1.50, alias="smrt_budget_per_run_usd")
+    budget_per_ticket_usd: float = Field(default=0.50, alias="smrt_budget_per_ticket_usd")
     budget_per_day_usd: float = Field(default=10.00, alias="smrt_budget_per_day_usd")
 
-    # Models
-    model_reviewer: str = Field(default="claude-opus-4-7", alias="smrt_model_reviewer")
-    model_qa: str = Field(default="claude-sonnet-4-6", alias="smrt_model_qa")
-    model_coder: str = Field(default="claude-sonnet-4-6", alias="smrt_model_coder")
+    # Models (env overrides these; haiku is the dev default)
+    model_reviewer: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_reviewer")
+    model_qa: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_qa")
+    model_coder: str = Field(default="claude-haiku-4-5-20251001", alias="smrt_model_coder")
 
     # Loop caps
     max_fix_attempts: int = Field(default=5, alias="smrt_max_fix_attempts")
@@ -34,8 +66,36 @@ class Settings(BaseSettings):
     # Path allowlist (comma-separated)
     project_root_allowlist: str = Field(default="", alias="smrt_project_root_allowlist")
 
+    # UI defaults for new projects (overridable per-project via Config tab)
+    thought_process_mode: bool = Field(default=False, alias="smrt_thought_process_mode")
+
     # Observability
     log_level: str = Field(default="INFO", alias="smrt_log_level")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Resolve the .env file dynamically so tests can monkeypatch _find_env_file.
+        # Dotenv beats OS env vars: ANTHROPIC_API_KEY in the project's .env is always
+        # used, even if the host shell has a different key exported (e.g. another project).
+        # In Docker _find_env_file() returns None → dotenv source contributes nothing →
+        # Docker's env_file: injection (regular OS env vars in the container) applies.
+        env_file = _find_env_file()
+        if env_file:
+            fresh_dotenv = DotEnvSettingsSource(
+                settings_cls,
+                env_file=str(env_file),
+                env_file_encoding="utf-8",
+                case_sensitive=False,
+            )
+            return (init_settings, fresh_dotenv, env_settings, file_secret_settings)
+        return (init_settings, env_settings, file_secret_settings)
 
     @property
     def allowed_project_roots(self) -> list[str]:

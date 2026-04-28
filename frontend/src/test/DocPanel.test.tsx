@@ -5,9 +5,8 @@ import { setupServer } from 'msw/node'
 import { DocPanel } from '../components/DocPanel'
 
 const mockFiles = [
-  { backend: 'github', path: 'docs/api/GET_items.md' },
-  { backend: 'github', path: 'docs/modules/todo-api.md' },
-  { backend: 'obsidian', path: 'wiki/api/GET_items.md' },
+  { backend: 'obsidian', path: 'docs/api/GET_items.md' },
+  { backend: 'obsidian', path: 'docs/modules/todo-api.md' },
 ]
 
 const server = setupServer(
@@ -21,15 +20,15 @@ afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
 
 describe('DocPanel', () => {
-  it('shows GitHub and Obsidian as enabled chips', async () => {
+  it('shows Obsidian as enabled chip', async () => {
     render(<DocPanel projectId={1} />)
-    await waitFor(() => expect(screen.getByText(/✓ GitHub/i)).toBeInTheDocument())
-    expect(screen.getByText(/✓ Obsidian/i)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/✓ Obsidian/i)).toBeInTheDocument())
   })
 
-  it('shows Jira and Confluence as coming soon', async () => {
+  it('shows GitHub, Jira and Confluence as coming soon', async () => {
     render(<DocPanel projectId={1} />)
-    await waitFor(() => screen.getByText(/✓ GitHub/i))
+    await waitFor(() => expect(screen.getByText(/✓ Obsidian/i)).toBeInTheDocument())
+    expect(screen.getByText(/GitHub.*coming soon/i)).toBeInTheDocument()
     expect(screen.getByText(/Jira.*coming soon/i)).toBeInTheDocument()
     expect(screen.getByText(/Confluence.*coming soon/i)).toBeInTheDocument()
   })
@@ -38,7 +37,6 @@ describe('DocPanel', () => {
     render(<DocPanel projectId={1} />)
     await waitFor(() => expect(screen.getByText('docs/api/GET_items.md')).toBeInTheDocument())
     expect(screen.getByText('docs/modules/todo-api.md')).toBeInTheDocument()
-    expect(screen.getByText('wiki/api/GET_items.md')).toBeInTheDocument()
   })
 
   it('shows no-docs message when list is empty', async () => {

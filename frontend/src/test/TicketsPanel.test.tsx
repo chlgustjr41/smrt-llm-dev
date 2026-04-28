@@ -11,18 +11,30 @@ const mockTickets = [
     title: 'GET /items returns 404',
     content: '# GET /items returns 404\nThe endpoint is missing from the router.',
     status: 'pending_confirmation',
+    session_id: null,
   },
   {
     id: '2026-04-24-002',
     title: 'POST /items ignores body',
     content: '# POST /items ignores body\nInput data is discarded.',
     status: 'closed',
+    session_id: null,
   },
 ]
 
 const server = setupServer(
   http.get('http://localhost/api/projects/1/tickets', () =>
     HttpResponse.json(mockTickets),
+  ),
+  http.get('http://localhost/api/projects/1/coder/status', () =>
+    HttpResponse.json({ idle: true, session_id: null, status: null, ticket_id: null }),
+  ),
+  http.post('http://localhost/api/projects/1/tickets/:ticketId/approve', ({ params }) =>
+    HttpResponse.json({
+      ticket_id: params.ticketId,
+      session_id: 'test-session-123',
+      status: 'in_progress',
+    }),
   ),
 )
 
@@ -69,6 +81,7 @@ describe('TicketsPanel', () => {
             title: 'New ticket',
             content: '# New ticket\nNew content.',
             status: 'pending_confirmation',
+            session_id: null,
           },
         ]),
       ),
@@ -82,7 +95,35 @@ describe('TicketsPanel', () => {
     render(<TicketsPanel projectId={1} />)
     await waitFor(() => screen.getByText('Pending Confirmation'))
     expect(screen.getByText('Closed')).toBeInTheDocument()
-    expect(screen.getByText('2026-04-24-001')).toBeInTheDocument()  // pending col
-    expect(screen.getByText('2026-04-24-002')).toBeInTheDocument()  // closed col
+    expect(screen.getByText('2026-04-24-001')).toBeInTheDocument()
+    expect(screen.getByText('2026-04-24-002')).toBeInTheDocument()
+  })
+
+  it('shows all 5 kanban column headers', async () => {
+    render(<TicketsPanel projectId={1} />)
+    await waitFor(() => screen.getByText('Pending Confirmation'))
+    expect(screen.getByText('In Progress')).toBeInTheDocument()
+    expect(screen.getByText('QA Review')).toBeInTheDocument()
+    expect(screen.getByText('Needs Review')).toBeInTheDocument()
+    expect(screen.getByText('Closed')).toBeInTheDocument()
+  })
+
+  it('shows agent log toggle on ticket card when session_id is present', async () => {
+    server.use(
+      http.get('http://localhost/api/projects/1/tickets', () =>
+        HttpResponse.json([
+          {
+            id: '2026-04-24-004',
+            title: 'Active fix ticket',
+            content: '# Active fix\nBeing fixed now.',
+            status: 'in_progress',
+            session_id: 'active-session-abc',
+          },
+        ]),
+      ),
+    )
+    render(<TicketsPanel projectId={1} />)
+    await waitFor(() => screen.getByText('2026-04-24-004'))
+    expect(screen.getByText(/Coder fixing/i)).toBeInTheDocument()
   })
 })

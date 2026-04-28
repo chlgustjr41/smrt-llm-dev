@@ -14,3 +14,15 @@ export async function getRunEvents(projectId: number, runId: string): Promise<Ag
   const data = await apiFetch<{ events: AgentEvent[] }>(`/projects/${projectId}/runs/${runId}/events`)
   return data.events
 }
+
+export function postRunBudgetDecision(
+  projectId: number,
+  runId: string,
+  decision: 'continue' | 'terminate',
+): Promise<{ run_id: string; decision: string }> {
+  return apiFetch(`/projects/${projectId}/runs/${runId}/budget-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  })
+}

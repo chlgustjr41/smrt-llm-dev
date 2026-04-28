@@ -12,24 +12,45 @@ _SECRET_SPEC = pathspec.PathSpec.from_lines("gitwildmatch", [
     "*.pem", "*.key", "*password*", "*.p12", "*.pfx",
 ])
 
-_SKIP_DIRS = {".git", ".smrt", "__pycache__", "node_modules", ".venv", "venv"}
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
-def _gitignore_spec(project_path: Path) -> pathspec.PathSpec:
-    gi = project_path / ".gitignore"
-    if gi.exists():
-        return pathspec.PathSpec.from_lines("gitwildmatch", gi.read_text().splitlines())
-    return pathspec.PathSpec.from_lines("gitwildmatch", [])
+def _agentignore_spec(project_path: Path) -> pathspec.PathSpec:
+    """Build a single PathSpec from all .agentignore files in the project tree.
+
+    Nested .agentignore files (e.g. eval-fixtures/todo-api/.agentignore) have
+    their patterns prefixed with the relative directory so that patterns are
+    always matched against paths relative to project_path.
+    """
+    patterns: list[str] = []
+    for ai_file in sorted(project_path.rglob(".agentignore")):
+        try:
+            lines = ai_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        try:
+            rel_dir = ai_file.parent.relative_to(project_path)
+        except ValueError:
+            continue
+        prefix = str(rel_dir).replace("\\", "/")
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # Root-level .agentignore: use the pattern as-is
+            # Nested .agentignore: prefix pattern with its directory
+            patterns.append(stripped if prefix == "." else f"{prefix}/{stripped}")
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 
 def list_files(project_path: Path, subdir: str = "") -> list[str]:
-    """Return sorted relative paths of all non-secret, non-gitignored source files."""
+    """Return sorted relative paths of all non-secret, non-agentignored source files."""
     if subdir:
         blocked, reason = is_blocked(project_path, subdir)
         if blocked:
             return [f"Access denied: {reason}"]
     base = project_path / subdir if subdir else project_path
-    spec = _gitignore_spec(project_path)
+    spec = _agentignore_spec(project_path)
     result = []
     for root, dirs, files in os.walk(base):
         dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)

@@ -13,8 +13,8 @@ from smrt_agent.api.qa_sessions import router as qa_sessions_router
 from smrt_agent.api.tickets import router as tickets_router
 from smrt_agent.api.docs import router as docs_router
 from smrt_agent.api.stats import router as stats_router
-from smrt_agent.api.provenance import router as provenance_router
 from smrt_agent.api.pr import router as pr_router
+from smrt_agent.api.coder import router as coder_router
 
 
 @asynccontextmanager
@@ -44,6 +44,17 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "version": app.version}
 
+    @app.get("/llm-provider")
+    async def llm_provider() -> dict:
+        s = Settings()
+        if s.use_local_llm:
+            return {
+                "provider": "local",
+                "base_url": s.local_llm_base_url,
+                "model": s.local_llm_model,
+            }
+        return {"provider": "anthropic"}
+
     app.include_router(filesystem_router)
     app.include_router(projects_router)
     app.include_router(sandbox_router)
@@ -52,8 +63,8 @@ def create_app() -> FastAPI:
     app.include_router(tickets_router)
     app.include_router(docs_router)
     app.include_router(stats_router)
-    app.include_router(provenance_router)
     app.include_router(pr_router)
+    app.include_router(coder_router)
 
     return app
 

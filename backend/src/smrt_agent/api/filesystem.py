@@ -3,8 +3,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-_WORKSPACE = Path("/workspace")
-
 router = APIRouter(prefix="/filesystem", tags=["filesystem"])
 
 
@@ -17,12 +15,6 @@ class FsEntry(BaseModel):
 @router.get("", response_model=list[FsEntry])
 async def list_directory(path: str = Query(default="/workspace")) -> list[FsEntry]:
     target = Path(path).resolve()
-
-    # Reject traversal outside /workspace
-    try:
-        target.relative_to(_WORKSPACE)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Path must be inside /workspace")
 
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"Path not found: {path}")

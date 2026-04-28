@@ -137,43 +137,87 @@ class TestIsBlocked:
 # Gitignore integration
 # ---------------------------------------------------------------------------
 
-class TestGitignoreCheck:
-    def test_gitignored_file_blocked(self, tmp_path):
-        """A file matching .gitignore patterns should be blocked."""
-        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+class TestAgentignoreCheck:
+    def test_agentignored_file_blocked(self, tmp_path):
+        """A file matching .agentignore patterns should be blocked."""
+        (tmp_path / ".agentignore").write_text("*.log\n", encoding="utf-8")
         result = check_path(tmp_path, "app.log")
-        assert result is not None, "app.log should be blocked because *.log is gitignored"
+        assert result is not None, "app.log should be blocked because *.log is in .agentignore"
 
-    def test_non_gitignored_file_allowed(self, tmp_path):
-        """A file NOT matching .gitignore patterns should be allowed."""
-        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    def test_non_agentignored_file_allowed(self, tmp_path):
+        """A file NOT matching .agentignore patterns should be allowed."""
+        (tmp_path / ".agentignore").write_text("*.log\n", encoding="utf-8")
         result = check_path(tmp_path, "app.py")
         assert result is None, "app.py should not be blocked"
 
-    def test_tests_generated_exception(self, tmp_path):
-        """Paths under tests/generated/ are always allowed even if tests/ is gitignored."""
-        (tmp_path / ".gitignore").write_text("tests/\n*.py\n", encoding="utf-8")
-        # Even though tests/ is gitignored, tests/generated/ is excepted
-        result = check_path(tmp_path, "tests/generated/test_foo.py")
-        assert result is None, "tests/generated/test_foo.py should NOT be blocked"
+    def test_gitignore_does_not_block(self, tmp_path):
+        """.gitignore entries no longer block agent access — only .agentignore does."""
+        (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+        result = check_path(tmp_path, "app.log")
+        assert result is None, "app.log should NOT be blocked by .gitignore — only .agentignore matters"
 
-    def test_no_gitignore_file_allowed(self, tmp_path):
-        """Without a .gitignore, all non-secret files are allowed."""
+    def test_smrt_dir_accessible(self, tmp_path):
+        """.smrt/ directory is accessible even when listed in .gitignore."""
+        (tmp_path / ".gitignore").write_text(".smrt/\n.smrt/runs/\n", encoding="utf-8")
+        result = check_path(tmp_path, ".smrt/state.db")
+        assert result is None, ".smrt/ should NOT be blocked — gitignore no longer gates agent access"
+
+    def test_no_agentignore_file_allowed(self, tmp_path):
+        """Without a .agentignore, all non-secret files are allowed."""
         result = check_path(tmp_path, "some/arbitrary/file.txt")
         assert result is None
 
-    def test_nested_gitignore_respected(self, tmp_path):
-        """A .gitignore in a subdirectory is respected for files under that dir."""
+    def test_nested_agentignore_respected(self, tmp_path):
+        """A .agentignore in a subdirectory is respected for files under that dir."""
         subdir = tmp_path / "subdir"
         subdir.mkdir()
-        (subdir / ".gitignore").write_text("*.secret\n", encoding="utf-8")
+        (subdir / ".agentignore").write_text("*.secret\n", encoding="utf-8")
         result = check_path(tmp_path, "subdir/data.secret")
-        assert result is not None, "subdir/data.secret should be blocked by subdir/.gitignore"
+        assert result is not None, "subdir/data.secret should be blocked by subdir/.agentignore"
 
-    def test_nested_gitignore_does_not_affect_parent(self, tmp_path):
-        """A .gitignore in a subdirectory does NOT block files in other directories."""
+    def test_nested_agentignore_does_not_affect_parent(self, tmp_path):
+        """A .agentignore in a subdirectory does NOT block files in other directories."""
         subdir = tmp_path / "subdir"
         subdir.mkdir()
-        (subdir / ".gitignore").write_text("*.secret\n", encoding="utf-8")
+        (subdir / ".agentignore").write_text("*.secret\n", encoding="utf-8")
         result = check_path(tmp_path, "otherdir/data.secret")
-        assert result is None, "otherdir/data.secret should NOT be blocked by subdir/.gitignore"
+        assert result is None, "otherdir/data.secret should NOT be blocked by subdir/.agentignore"
+
+
+class TestReviewerAgentignoreSpec:
+    """Verify that reviewer list_files honours nested .agentignore files."""
+
+    def test_root_agentignore_hides_file_from_listing(self, tmp_path):
+        from smrt_agent.agents.reviewer.tools import list_files
+        (tmp_path / ".agentignore").write_text("BUGS.md\n", encoding="utf-8")
+        (tmp_path / "BUGS.md").write_text("secret", encoding="utf-8")
+        (tmp_path / "main.py").write_text("pass", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "BUGS.md" not in files
+        assert "main.py" in files
+
+    def test_nested_agentignore_hides_file_from_listing(self, tmp_path):
+        """A .agentignore in a subdir hides files relative to that subdir."""
+        from smrt_agent.agents.reviewer.tools import list_files
+        subdir = tmp_path / "eval"
+        subdir.mkdir()
+        (subdir / ".agentignore").write_text("BUGS.md\n", encoding="utf-8")
+        (subdir / "BUGS.md").write_text("secret", encoding="utf-8")
+        (subdir / "main.py").write_text("pass", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "eval/BUGS.md" not in files
+        assert "eval/main.py" in files
+
+    def test_nested_agentignore_does_not_hide_sibling_dirs(self, tmp_path):
+        """A nested .agentignore does NOT hide matching names in sibling directories."""
+        from smrt_agent.agents.reviewer.tools import list_files
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir(); b.mkdir()
+        # Use a name that doesn't match _SECRET_SPEC so only agentignore gates it.
+        (a / ".agentignore").write_text("notes.txt\n", encoding="utf-8")
+        (a / "notes.txt").write_text("hidden", encoding="utf-8")
+        (b / "notes.txt").write_text("visible", encoding="utf-8")
+        files = list_files(tmp_path)
+        assert "a/notes.txt" not in files
+        assert "b/notes.txt" in files

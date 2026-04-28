@@ -106,7 +106,7 @@ class ObsidianBackend(DocBackend):
 
     async def upsert_module_doc(self, module: ModuleDoc) -> None:
         slug = module.name.replace(".", "__").replace("/", "__")
-        path = self.project_path / "wiki" / "modules" / f"{slug}.md"
+        path = self.project_path / "docs" / "modules" / f"{slug}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             self._frontmatter("module", module.tags)
@@ -117,7 +117,7 @@ class ObsidianBackend(DocBackend):
     async def upsert_endpoint_doc(self, endpoint: EndpointDoc) -> None:
         slug = endpoint.path.strip("/").replace("/", "_") or "root"
         filename = f"{endpoint.method}_{slug}.md"
-        path = self.project_path / "wiki" / "api" / filename
+        path = self.project_path / "docs" / "api" / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         auth = "Required" if endpoint.auth_required else "None"
         path.write_text(
@@ -129,7 +129,7 @@ class ObsidianBackend(DocBackend):
         )
 
     async def upsert_decision(self, decision: DecisionDoc) -> None:
-        path = self.project_path / "wiki" / "decisions" / f"{decision.slug}.md"
+        path = self.project_path / "docs" / "decisions" / f"{decision.slug}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             self._frontmatter("decision", decision.tags)

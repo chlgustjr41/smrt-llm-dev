@@ -51,8 +51,7 @@ describe('LiveAgentView', () => {
         agent: 'reviewer',
       })
     })
-    // text_delta hidden by default; click Show thoughts to reveal
-    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
+    // text_delta visible by default (showThoughts starts true)
     expect(screen.getByText('Analyzing source tree…')).toBeInTheDocument()
   })
 
@@ -120,7 +119,7 @@ describe('LiveAgentView', () => {
     expect(MockEventSource.instance?.closed).toBe(true)
   })
 
-  it('toggles thought visibility when Show thoughts button clicked', async () => {
+  it('toggles thought visibility when Hide thoughts button clicked', async () => {
     const user = userEvent.setup()
     render(<LiveAgentView projectId={1} runId="run-abc-123" />)
     act(() => {
@@ -130,13 +129,13 @@ describe('LiveAgentView', () => {
         agent: 'reviewer',
       })
     })
-    // Initially hidden
-    expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
-    // Click Show thoughts — now visible
-    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
+    // Initially visible (showThoughts starts true)
     expect(screen.getByText('Toggle thought text')).toBeInTheDocument()
-    // Click Hide thoughts — hidden again
+    // Click Hide thoughts — now hidden
     await user.click(screen.getByRole('button', { name: /hide thoughts/i }))
     expect(screen.queryByText('Toggle thought text')).not.toBeInTheDocument()
+    // Click Show thoughts — visible again
+    await user.click(screen.getByRole('button', { name: /show thoughts/i }))
+    expect(screen.getByText('Toggle thought text')).toBeInTheDocument()
   })
 })
