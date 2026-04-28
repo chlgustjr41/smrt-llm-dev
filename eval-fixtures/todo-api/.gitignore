@@ -1,5 +1,13 @@
 # Runtime
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
 .venv/
+
+# Agent-managed state — generated during evaluation runs, not part of the
+# bug-plated baseline. Excluded so master HEAD always reflects the clean
+# starting state for the agent to work against.
+.smrt/
+docs/
 

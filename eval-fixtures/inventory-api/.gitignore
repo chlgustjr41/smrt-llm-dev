@@ -1,0 +1,18 @@
+# Runtime
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.env
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# Agent-managed state — generated during evaluation runs, not part of the
+# bug-plated baseline. These directories grow as the QA / Coder / Reviewer
+# agents work on the project; they MUST be excluded so the master HEAD
+# always represents the clean buggy starting state.
+.smrt/
+docs/

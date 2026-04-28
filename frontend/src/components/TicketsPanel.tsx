@@ -178,10 +178,16 @@ function FixSummaryTab({
   projectId,
   ticketId,
   sessionId,
+  ticketStatus,
 }: {
   projectId: number
   ticketId: string
   sessionId?: string | null
+  /** Current ticket status. Included so the effect re-fires when the loop
+   *  transitions from active (in_progress / qa_review) → terminal
+   *  (needs_review / closed). Without this, a dialog opened mid-loop never
+   *  refreshes once the persisted summary is finally written. */
+  ticketStatus?: TicketStatus
 }) {
   const [loading, setLoading] = useState(true)
   const [changes, setChanges] = useState<FileChange[]>([])
@@ -250,7 +256,12 @@ function FixSummaryTab({
     }
     load()
     return () => { cancelled = true }
-  }, [projectId, ticketId, sessionId])
+    // ticketStatus is in deps so the persisted summary re-fetches as soon as
+    // the loop terminates — the parent's 5s ticker updates `tickets`, which
+    // bubbles a new status into this component, and we re-load. Without this,
+    // a dialog left open through the end of the loop would show stale data
+    // until the user closed and re-opened it.
+  }, [projectId, ticketId, sessionId, ticketStatus])
 
   if (loading) {
     return (
@@ -933,6 +944,7 @@ function TicketDialog({
                 projectId={projectId}
                 ticketId={ticket.id}
                 sessionId={ticket.session_id}
+                ticketStatus={ticket.status}
               />
             </div>
           )}
