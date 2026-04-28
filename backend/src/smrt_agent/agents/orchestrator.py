@@ -7,7 +7,9 @@ from pathlib import Path
 
 from smrt_agent.agents.qa.loop import run_qa_agent
 from smrt_agent.agents.coder.loop import run_coder_agent
-from smrt_agent.agents.qa.tools import run_pytest
+from smrt_agent.agents.qa.tools import run_pytest, collect_coverage
+from smrt_agent.agents.qa.budget import compute_cost_usd as _qa_cost
+from smrt_agent.llm import LLMClient, NormalizedTextBlock
 
 
 def _ts() -> str:
@@ -106,143 +108,147 @@ def _record_failed_fix(
         }) + "\n")
 
 
+_QA_SATISFIED_SIGNAL = "[QA_SATISFIED]"
+
+
+async def _get_qa_feedback(
+    *,
+    ticket_content: str,
+    recheck_output: str,
+    attempt: int,
+    llm_client: LLMClient,
+    model: str,
+    queue: asyncio.Queue,
+    ticket_id: str = "",
+    session_id: str = "",
+) -> tuple[str, bool]:
+    """Ask QA agent to analyze a failed fix and produce guidance for the next attempt.
+
+    Returns (feedback_text, satisfied) where satisfied=True means QA declared the
+    fix complete despite failing tests (unrelated failures). Emits session_status
+    "qa_advising", streams qa_text_delta events, and emits qa_feedback_done.
+    """
+    await queue.put({
+        "type": "session_status",
+        "status": "qa_advising",
+        "fix_attempt": attempt,
+        "ts": _ts(),
+    })
+
+    system = (
+        "You are the senior QA engineer who wrote the bug ticket below. "
+        "The coder has made a fix attempt. Analyze the pytest output carefully.\n\n"
+        "CASE A — the fix IS correct: all failures are unrelated to the bug (e.g. pre-existing "
+        "flaky tests, environmental issues, or tests for other features). "
+        "In that case, explain why the fix is correct and end your response with the exact token: "
+        f"{_QA_SATISFIED_SIGNAL}\n\n"
+        "CASE B — the fix is NOT correct: provide specific, actionable guidance for the next "
+        "attempt (3-5 sentences). Focus on the root cause and what to try differently. "
+        "Do NOT include the satisfied token."
+    )
+    user_msg = (
+        f"Original bug ticket:\n{ticket_content}\n\n"
+        f"Fix attempt {attempt + 1} pytest output:\n```\n{recheck_output}\n```\n\n"
+        "Is the fix correct (CASE A) or not (CASE B)? Respond accordingly."
+    )
+    messages: list[dict] = [{"role": "user", "content": user_msg}]
+    collected: list[str] = []
+
+    async def on_text(text: str) -> None:
+        collected.append(text)
+        await queue.put({"type": "qa_text_delta", "text": text, "agent": "qa", "ts": _ts()})
+
+    response = await llm_client.stream_turn(
+        system=system,
+        tools=[],
+        messages=messages,
+        model=model,
+        on_text=on_text,
+    )
+
+    raw = "".join(collected).strip()
+    satisfied = _QA_SATISFIED_SIGNAL in raw
+    feedback = raw.replace(_QA_SATISFIED_SIGNAL, "").strip()
+
+    feedback_cost = _qa_cost(response.input_tokens, response.output_tokens, model)
+    await queue.put({
+        "type": "qa_feedback_done",
+        "model": model,
+        "total_input_tokens": response.input_tokens,
+        "total_output_tokens": response.output_tokens,
+        "cost_usd": round(feedback_cost, 6),
+        "ts": _ts(),
+    })
+
+    if satisfied:
+        await queue.put({
+            "type": "qa_early_exit",
+            "ticket_id": ticket_id,
+            "session_id": session_id,
+            "reasoning": feedback,
+            "ts": _ts(),
+        })
+
+    return feedback, satisfied
+
+
 async def run_qa_session(
     *,
     session_id: str,
     project_path: Path,
-    api_key: str,
+    llm_client: LLMClient,
     model_qa: str,
     model_coder: str,
     budget_usd: float,
-    max_fix_attempts: int,
+    max_fix_attempts: int = 0,
+    max_questions_per_attempt: int = 0,
     queue: asyncio.Queue,
-    hitl_events: dict[str, asyncio.Event],
-    hitl_decisions: dict[str, str],
+    job_id: str | None = None,
 ) -> str:
-    """Coordinate the QA/Coder fix loop. Returns final status string."""
-    per_agent_budget = budget_usd / max(max_fix_attempts * 2 + 1, 1)
-    prior_fix_context: str | None = None
+    """Run one QA discovery pass. Files tickets into pending_confirmation; coder loop is
+    triggered separately when the user approves a ticket via the kanban board."""
+    await queue.put({
+        "type": "session_status",
+        "status": "qa_running",
+        "fix_attempt": 0,
+        "ts": _ts(),
+    })
 
-    for attempt in range(max_fix_attempts + 1):
+    ticket_id = await run_qa_agent(
+        project_path=project_path,
+        llm_client=llm_client,
+        model=model_qa,
+        budget_usd=budget_usd,
+        queue=queue,
+        job_id=job_id,
+    )
+
+    if ticket_id is None:
         await queue.put({
             "type": "session_status",
-            "status": "qa_running",
-            "fix_attempt": attempt,
+            "status": "done",
+            "fix_attempt": 0,
             "ts": _ts(),
         })
+        return "done"
 
-        ticket_id = await run_qa_agent(
-            project_path=project_path,
-            api_key=api_key,
-            model=model_qa,
-            budget_usd=per_agent_budget,
-            queue=queue,
-            prior_fix_context=prior_fix_context,
-        )
-
-        if ticket_id is None:
-            await queue.put({
-                "type": "session_status",
-                "status": "done",
-                "fix_attempt": attempt,
-                "ts": _ts(),
-            })
-            return "done"
-
-        if attempt >= max_fix_attempts:
-            await queue.put({
-                "type": "session_status",
-                "status": "error",
-                "message": "Max fix attempts reached",
-                "ts": _ts(),
-            })
-            return "error"
-
-        await queue.put({
-            "type": "hitl_request",
-            "session_id": session_id,
-            "ticket_id": ticket_id,
-            "fix_attempt": attempt,
-            "ts": _ts(),
-        })
-        await queue.put({
-            "type": "session_status",
-            "status": "hitl_waiting",
-            "ts": _ts(),
-        })
-
-        event = asyncio.Event()
-        hitl_events[session_id] = event
-
-        try:
-            await asyncio.wait_for(event.wait(), timeout=3600.0)
-        except asyncio.TimeoutError:
-            hitl_events.pop(session_id, None)
-            hitl_decisions.pop(session_id, None)
-            await queue.put({
-                "type": "session_status",
-                "status": "error",
-                "message": "HITL approval timed out",
-                "ts": _ts(),
-            })
-            return "error"
-
-        decision = hitl_decisions.pop(session_id, "skip")
-        hitl_events.pop(session_id, None)
-
-        if decision == "skip":
-            await queue.put({
-                "type": "session_status",
-                "status": "skipped",
-                "ts": _ts(),
-            })
-            return "skipped"
-
-        ticket_path = project_path / ".smrt" / "tickets" / f"{ticket_id}.md"
-        ticket_content = (
-            ticket_path.read_text(encoding="utf-8")
-            if ticket_path.exists()
-            else f"Ticket {ticket_id}"
-        )
-        pytest_output = run_pytest(project_path)
-
-        await queue.put({
-            "type": "session_status",
-            "status": "coder_running",
-            "fix_attempt": attempt,
-            "ts": _ts(),
-        })
-        await run_coder_agent(
-            project_path=project_path,
-            api_key=api_key,
-            model=model_coder,
-            budget_usd=per_agent_budget,
-            queue=queue,
-            ticket_content=ticket_content,
-            pytest_output=pytest_output,
-        )
-
-        recheck_output = run_pytest(project_path)
-        await queue.put({
-            "type": "recheck_output",
-            "output": recheck_output[:2000],
-            "ts": _ts(),
-        })
-
-        if "passed" in recheck_output and "failed" not in recheck_output:
-            _record_pending_pr(project_path, ticket_id, session_id, recheck_output)
-            await queue.put({"type": "pr_ready", "ticket_id": ticket_id, "session_id": session_id, "ts": _ts()})
-            await queue.put({
-                "type": "session_status",
-                "status": "done",
-                "fix_attempt": attempt,
-                "ts": _ts(),
-            })
-            return "done"
-
-        prior_fix_context = f"Fix attempt {attempt + 1} recheck:\n{recheck_output}"
-
-    return "error"
+    # Ticket filed — emit hitl_request so the frontend can count tickets filed,
+    # then immediately end the session. The ticket stays in pending_confirmation
+    # until the user approves it via the kanban board.
+    await queue.put({
+        "type": "hitl_request",
+        "session_id": session_id,
+        "ticket_id": ticket_id,
+        "fix_attempt": 0,
+        "ts": _ts(),
+    })
+    await queue.put({
+        "type": "session_status",
+        "status": "done",
+        "fix_attempt": 0,
+        "ts": _ts(),
+    })
+    return "done"
 
 
 async def run_ticket_fix_session(
@@ -250,12 +256,15 @@ async def run_ticket_fix_session(
     session_id: str,
     ticket_id: str,
     project_path: Path,
-    api_key: str,
+    llm_client: LLMClient,
     model_coder: str,
     budget_usd: float,
     max_fix_attempts: int,
     queue: asyncio.Queue,
     on_status_change: Callable[[str], Awaitable[None]] | None = None,
+    model_qa: str | None = None,
+    max_questions_per_attempt: int = 0,
+    job_id: str | None = None,
 ) -> str:
     """Run Coder → pytest-verify loop for a specific approved ticket.
 
@@ -265,8 +274,6 @@ async def run_ticket_fix_session(
       done           → Tests green; PR entry recorded in pending-prs.jsonl
       error          → Max attempts exhausted
     """
-    per_agent_budget = budget_usd / max(max_fix_attempts * 2, 1)
-
     ticket_path = project_path / ".smrt" / "tickets" / f"{ticket_id}.md"
     ticket_content = (
         ticket_path.read_text(encoding="utf-8")
@@ -291,12 +298,16 @@ async def run_ticket_fix_session(
         pytest_output = run_pytest(project_path)
         await run_coder_agent(
             project_path=project_path,
-            api_key=api_key,
+            llm_client=llm_client,
             model=model_coder,
-            budget_usd=per_agent_budget,
+            budget_usd=budget_usd,
             queue=queue,
             ticket_content=ticket_content,
             pytest_output=pytest_output,
+            llm_client_qa=llm_client if model_qa else None,
+            model_qa=model_qa,
+            max_questions=max_questions_per_attempt,
+            job_id=job_id,
         )
 
         # ── QA verification phase ─────────────────────────────────────────
@@ -320,6 +331,7 @@ async def run_ticket_fix_session(
 
         if "passed" in recheck_output and "failed" not in recheck_output:
             _record_pending_pr(project_path, ticket_id, session_id, recheck_output)
+            await asyncio.to_thread(collect_coverage, project_path)
             await queue.put({
                 "type": "pr_ready",
                 "ticket_id": ticket_id,
@@ -341,6 +353,26 @@ async def run_ticket_fix_session(
             "recheck": recheck_output[:500],
             "ts": _ts(),
         })
+
+        if attempt < max_fix_attempts - 1 and model_qa:
+            qa_advice, qa_satisfied = await _get_qa_feedback(
+                ticket_content=ticket_content,
+                recheck_output=recheck_output,
+                attempt=attempt,
+                llm_client=llm_client,
+                model=model_qa,
+                queue=queue,
+                ticket_id=ticket_id,
+                session_id=session_id,
+            )
+            if qa_satisfied:
+                # QA advisor declared the fix complete despite failing tests
+                _record_pending_pr(project_path, ticket_id, session_id, recheck_output)
+                await asyncio.to_thread(collect_coverage, project_path)
+                await queue.put({"type": "pr_ready", "ticket_id": ticket_id, "session_id": session_id, "ts": _ts()})
+                await queue.put({"type": "session_status", "status": "done", "fix_attempt": attempt, "ts": _ts()})
+                return "done"
+            ticket_content = ticket_content + f"\n\n---\nQA feedback after attempt {attempt + 1}:\n{qa_advice}"
 
     # All attempts exhausted — generate failure analysis and route to Needs Review
     analysis = _analyze_fix_failure(recheck_outputs)

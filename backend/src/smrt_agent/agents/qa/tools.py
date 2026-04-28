@@ -43,6 +43,67 @@ def run_pytest(project_path: Path) -> str:
     return result.stdout + result.stderr
 
 
+def collect_coverage(project_path: Path) -> dict | None:
+    """Run pytest with coverage and store results to .smrt/knowledge/coverage.json.
+
+    Also saves .smrt/knowledge/coverage_context.json: a mapping of
+    source-file basename → list of test node IDs that touched it, used
+    by the Tests tab hover tooltip to show indirect test coverage.
+
+    Requires pytest-cov >= 2.10. Returns the parsed coverage dict on success.
+    """
+    import json as _json
+
+    tests_dir = project_path / ".smrt" / "tests"
+    if not tests_dir.exists() or not list(tests_dir.glob("test_*.py")):
+        return None
+
+    cov_out = project_path / ".smrt" / "knowledge" / "coverage.json"
+    cov_out.parent.mkdir(parents=True, exist_ok=True)
+
+    env = {**os.environ, "PYTHONPATH": str(project_path)}
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", str(tests_dir),
+            "--tb=no", "-q",
+            "--cov=.", f"--cov-report=json:{cov_out}",
+            "--cov-context=test",  # record test node ID as context per covered line
+            "--no-header",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(project_path),
+        env=env,
+    )
+    # returncode 0=all pass, 1=some fail — both are fine; >1 means setup error
+    if result.returncode > 1 and "no module named pytest_cov" in (result.stdout + result.stderr).lower():
+        return None
+
+    if cov_out.exists():
+        try:
+            data = _json.loads(cov_out.read_text(encoding="utf-8"))
+            # Build source basename → [test_node_ids] from coverage contexts
+            file_to_tests: dict[str, list[str]] = {}
+            for fpath, finfo in data.get("files", {}).items():
+                basename = Path(fpath).name
+                test_ids: set[str] = set()
+                for line_contexts in finfo.get("contexts", {}).values():
+                    for ctx in line_contexts:
+                        if "::" in ctx:  # test node IDs always contain ::
+                            test_ids.add(ctx)
+                if test_ids:
+                    file_to_tests[basename] = sorted(test_ids)
+            ctx_out = cov_out.parent / "coverage_context.json"
+            ctx_out.write_text(
+                _json.dumps({"file_tests": file_to_tests}, indent=2), encoding="utf-8"
+            )
+            return data
+        except Exception:
+            pass
+    return None
+
+
 def write_bug_ticket(project_path: Path, title: str, description: str, test_output: str) -> str:
     """Write a bug ticket to .smrt/tickets/YYYY-MM-DD-NNN.md. Returns the ticket ID."""
     tickets_dir = project_path / ".smrt" / "tickets"

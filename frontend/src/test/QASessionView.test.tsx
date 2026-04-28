@@ -54,42 +54,31 @@ describe('QASessionView', () => {
     await waitFor(() => expect(screen.getByText(/Running tests/)).toBeInTheDocument())
   })
 
-  it('shows HITL buttons on hitl_request event', async () => {
+  it('does not auto-approve on hitl_request — ticket stays pending_confirmation', async () => {
+    let approvedCalled = false
+    server.use(
+      http.post('http://localhost/api/projects/1/qa-sessions/sess-1/approve', () => {
+        approvedCalled = true
+        return HttpResponse.json({ decision: 'approve' })
+      }),
+    )
     _sseScenario = [
       { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-001', fix_attempt: 0 },
-      { type: 'session_status', status: 'hitl_waiting' },
+      { type: 'done', status: 'done' },
     ]
     render(<QASessionView projectId={1} sessionId="sess-1" />)
-    await waitFor(() => expect(screen.getByRole('button', { name: /approve fix/i })).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/session complete/i)).toBeInTheDocument())
+    expect(approvedCalled).toBe(false)
   })
 
-  it('calls approve API when Approve clicked and hides HITL panel', async () => {
-    const user = userEvent.setup()
+  it('shows ticket count in completion banner when tickets were filed', async () => {
     _sseScenario = [
       { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-001', fix_attempt: 0 },
-      { type: 'session_status', status: 'hitl_waiting' },
+      { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-002', fix_attempt: 0 },
+      { type: 'done', status: 'done' },
     ]
     render(<QASessionView projectId={1} sessionId="sess-1" />)
-    await waitFor(() => screen.getByRole('button', { name: /approve fix/i }))
-    await user.click(screen.getByRole('button', { name: /approve fix/i }))
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /approve fix/i })).not.toBeInTheDocument()
-    )
-  })
-
-  it('calls skip API when Skip clicked and hides HITL panel', async () => {
-    const user = userEvent.setup()
-    _sseScenario = [
-      { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-24-001', fix_attempt: 0 },
-      { type: 'session_status', status: 'hitl_waiting' },
-    ]
-    render(<QASessionView projectId={1} sessionId="sess-1" />)
-    await waitFor(() => screen.getByRole('button', { name: /skip/i }))
-    await user.click(screen.getByRole('button', { name: /skip/i }))
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
-    )
+    await waitFor(() => expect(screen.getByText(/2 bug tickets filed/i)).toBeInTheDocument())
   })
 
   it('shows session complete after done event', async () => {

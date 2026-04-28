@@ -1,18 +1,18 @@
-"""Anthropic SDK streaming loop for the QA agent."""
+"""Streaming loop for the QA agent (provider-agnostic via LLMClient)."""
 import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
 from smrt_agent.agents.qa.budget import TOOL_DEFINITIONS, compute_cost_usd
+from smrt_agent.agents.budget_gateway import handle_budget_pause
 from smrt_agent.agents.qa.tools import (
     write_test_file, run_pytest, write_bug_ticket,
     write_test_status, append_bugs_resolved,
 )
 from smrt_agent.agents.reviewer.tools import list_files, read_file
+from smrt_agent.llm import LLMClient, NormalizedToolUse
 
 
 def _ts() -> str:
@@ -55,14 +55,14 @@ def _dispatch_tool(name: str, inputs: dict[str, Any], project_path: Path) -> tup
 async def run_qa_agent(
     *,
     project_path: Path,
-    api_key: str,
+    llm_client: LLMClient,
     model: str,
     budget_usd: float,
     queue: asyncio.Queue,
     prior_fix_context: str | None = None,
+    job_id: str | None = None,
 ) -> str | None:
     """Run the QA agent. Returns ticket_id if bugs found, None if all tests pass."""
-    client = anthropic.Anthropic(api_key=api_key)
     system_prompt = _load_system_prompt()
 
     project_md = project_path / ".smrt" / "Project.md"
@@ -72,7 +72,7 @@ async def run_qa_agent(
         else "(No Project.md found — survey the source tree directly.)"
     )
 
-    task = f"Project context:\n{context}\n"
+    task = f"Budget: ${budget_usd:.2f} USD — work efficiently.\n\nProject context:\n{context}\n"
     if prior_fix_context:
         task += f"\nPrevious fix attempt output:\n{prior_fix_context}\n"
     task += "\nGenerate and run black-box pytest tests. Write bug tickets for failures."
@@ -83,42 +83,43 @@ async def run_qa_agent(
     last_ticket_id: str | None = None
 
     while True:
-        with client.messages.stream(
-            model=model,
-            max_tokens=4096,
+        async def on_text(text: str) -> None:
+            await queue.put({
+                "type": "qa_text_delta",
+                "text": text,
+                "agent": "qa",
+                "ts": _ts(),
+            })
+
+        response = await llm_client.stream_turn(
             system=system_prompt,
             tools=TOOL_DEFINITIONS,
             messages=messages,
-        ) as stream:
-            for event in stream:
-                if hasattr(event, "type") and event.type == "content_block_delta":
-                    delta = getattr(event, "delta", None)
-                    if delta and getattr(delta, "type", None) == "text_delta":
-                        await queue.put({
-                            "type": "qa_text_delta",
-                            "text": delta.text,
-                            "agent": "qa",
-                            "ts": _ts(),
-                        })
-            response = stream.get_final_message()
+            model=model,
+            on_text=on_text,
+        )
 
-        total_input += response.usage.input_tokens
-        total_output += response.usage.output_tokens
+        total_input += response.input_tokens
+        total_output += response.output_tokens
         cost = compute_cost_usd(total_input, total_output, model)
 
         if cost >= budget_usd:
-            await queue.put({
-                "type": "budget_exceeded",
-                "cost_usd": round(cost, 4),
-                "total_input_tokens": total_input,
-                "total_output_tokens": total_output,
-                "ts": _ts(),
-            })
-            return last_ticket_id
+            should_continue, budget_usd = await handle_budget_pause(
+                job_id=job_id,
+                cost=cost,
+                budget_usd=budget_usd,
+                queue=queue,
+                total_input=total_input,
+                total_output=total_output,
+                ts_fn=_ts,
+            )
+            if not should_continue:
+                return last_ticket_id
 
         if response.stop_reason == "end_turn":
             await queue.put({
                 "type": "qa_done",
+                "model": model,
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
                 "cost_usd": round(cost, 4),
@@ -128,9 +129,9 @@ async def run_qa_agent(
             return last_ticket_id
 
         if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if getattr(block, "type", None) == "tool_use":
+            tool_results: list[tuple[str, str]] = []
+            for block in response.blocks:
+                if isinstance(block, NormalizedToolUse):
                     await queue.put({
                         "type": "tool_use",
                         "agent": "qa",
@@ -148,13 +149,9 @@ async def run_qa_agent(
                         "result": result[:2000],
                         "ts": _ts(),
                     })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
+                    tool_results.append((block.id, result))
+
+            llm_client.append_turn(messages, response, tool_results)
             continue
 
         await queue.put({

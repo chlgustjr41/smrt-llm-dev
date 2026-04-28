@@ -1,14 +1,16 @@
 """PR surface API: list pending PRs, accept or reject a fix."""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
-from smrt_agent.db.models import Project
+from smrt_agent.db.models import Project, QASession
 from smrt_agent.agents.qa.tools import append_bugs_resolved
 from smrt_agent.knowledge import append_lesson, append_rejection, sync_wiki_log
 
@@ -78,6 +80,19 @@ async def accept_pr(
         raise HTTPException(status_code=404, detail="No pending PR for this ticket")
     _write_pending_prs(project_path, remaining)
 
+    # ── Git: commit fix changes and merge to base branch ───────────────────
+    from smrt_agent.git import (
+        commit_and_merge_fix as _git_merge,
+        load_base_branch as _git_load_base,
+        clear_base_branch as _git_clear_base,
+    )
+    try:
+        base = _git_load_base(project_path, ticket_id)
+        _git_merge(project_path, base, ticket_id)
+        _git_clear_base(project_path, ticket_id)
+    except Exception as exc:
+        import logging; logging.getLogger(__name__).warning("git merge failed: %s", exc)
+
     append_bugs_resolved(project_path, ticket_id, "Accepted via PR surface review.")
     ticket_title = _get_ticket_title(project_path, ticket_id)
     append_lesson(project_path, ticket_id, "accepted", f"{ticket_title} — fix passed all tests.")
@@ -92,18 +107,99 @@ async def reject_pr(
     db: Annotated[AsyncSession, Depends(get_db)],
     body: RejectBody = RejectBody(),
 ) -> dict:
+    """Reject a fix and return the ticket to pending_confirmation as a fresh ticket.
+
+    Cleans up all status files so the ticket falls back to pending_confirmation
+    in list_tickets priority logic. Archives past session JSONL logs.
+    """
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_path = Path(project.canonical_path)
 
+    # ── Remove from pending-prs.jsonl (if present) ─────────────────────────
     entries = _read_pending_prs(project_path)
     remaining = [e for e in entries if e.get("ticket_id") != ticket_id]
-    if len(remaining) == len(entries):
-        raise HTTPException(status_code=404, detail="No pending PR for this ticket")
-    _write_pending_prs(project_path, remaining)
+    if len(remaining) < len(entries):
+        _write_pending_prs(project_path, remaining)
+
+    # ── Remove from failed-fixes.jsonl (if present) ────────────────────────
+    failed_log = project_path / ".smrt" / "failed-fixes.jsonl"
+    if failed_log.exists():
+        kept = []
+        for line in failed_log.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                if json.loads(s).get("ticket_id") != ticket_id:
+                    kept.append(s)
+            except json.JSONDecodeError:
+                kept.append(s)
+        failed_log.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+
+    # ── Remove from in-progress-tickets.txt ────────────────────────────────
+    in_progress_path = project_path / ".smrt" / "in-progress-tickets.txt"
+    if in_progress_path.exists():
+        ids = set()
+        for line in in_progress_path.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s:
+                ids.add(s)
+        ids.discard(ticket_id)
+        in_progress_path.write_text(
+            "\n".join(sorted(ids)) + ("\n" if ids else ""),
+            encoding="utf-8",
+        )
+
+    # ── Cancel any running fix task and mark active sessions as rejected ────
+    from smrt_agent.api.tickets import _tasks as _fix_tasks  # avoid circular import at module level
+    active_result = await db.execute(
+        select(QASession)
+        .where(QASession.project_id == project_id)
+        .where(QASession.ticket_id == ticket_id)
+        .where(QASession.completed_at.is_(None))
+    )
+    for active_sess in active_result.scalars().all():
+        active_sess.status = "rejected"
+        active_sess.completed_at = datetime.now(timezone.utc)
+        task = _fix_tasks.pop(active_sess.session_id, None)
+        if task and not task.done():
+            task.cancel()
+    await db.commit()
+
+    # ── Archive JSONL logs for all past sessions on this ticket ────────────
+    sessions_dir = project_path / ".smrt" / "qa-sessions"
+    if sessions_dir.exists():
+        archived_dir = sessions_dir / "archived"
+        archived_dir.mkdir(parents=True, exist_ok=True)
+        all_sessions = await db.execute(
+            select(QASession.session_id)
+            .where(QASession.project_id == project_id)
+            .where(QASession.ticket_id == ticket_id)
+        )
+        for (sid,) in all_sessions.all():
+            src = sessions_dir / f"{sid}.jsonl"
+            if src.exists():
+                src.rename(archived_dir / f"{sid}.jsonl")
+
+    # ── Git: discard changes and return to base branch ─────────────────────
+    from smrt_agent.git import (
+        discard_fix_branch as _git_discard,
+        load_base_branch as _git_load_base,
+        clear_base_branch as _git_clear_base,
+    )
+    try:
+        base = _git_load_base(project_path, ticket_id)
+        _git_discard(project_path, base, ticket_id)
+        _git_clear_base(project_path, ticket_id)
+    except Exception as exc:
+        import logging; logging.getLogger(__name__).warning("git discard failed: %s", exc)
+
+    # ── Record rejection lesson ────────────────────────────────────────────
     ticket_title = _get_ticket_title(project_path, ticket_id)
     reason = body.reason
     append_lesson(project_path, ticket_id, "rejected", f"{ticket_title} — rejected: {reason}")
     append_rejection(project_path, ticket_id, ticket_title, reason)
+
     return {"ticket_id": ticket_id, "status": "rejected"}

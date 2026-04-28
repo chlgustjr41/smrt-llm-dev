@@ -46,8 +46,6 @@ async def test_qa_session_model(db):
 async def test_orchestrator_done_on_first_pass(tmp_path):
     """If QA agent returns no ticket, orchestrator returns 'done'."""
     queue = asyncio.Queue()
-    hitl_events: dict = {}
-    hitl_decisions: dict = {}
 
     with patch("smrt_agent.agents.orchestrator.run_qa_agent", new=AsyncMock(return_value=None)):
         status = await run_qa_session(
@@ -57,10 +55,7 @@ async def test_orchestrator_done_on_first_pass(tmp_path):
             model_qa="claude-sonnet-4-6",
             model_coder="claude-sonnet-4-6",
             budget_usd=1.0,
-            max_fix_attempts=3,
             queue=queue,
-            hitl_events=hitl_events,
-            hitl_decisions=hitl_decisions,
         )
 
     assert status == "done"
@@ -70,39 +65,30 @@ async def test_orchestrator_done_on_first_pass(tmp_path):
     assert any(e.get("status") == "done" for e in events)
 
 
-async def test_orchestrator_skip_on_hitl_skip(tmp_path):
-    """If HITL decision is 'skip', orchestrator returns 'skipped'."""
+async def test_orchestrator_done_when_ticket_found(tmp_path):
+    """If QA agent files a ticket, orchestrator emits hitl_request and returns 'done'."""
     queue = asyncio.Queue()
-    hitl_events: dict = {}
-    hitl_decisions: dict = {}
-    session_id = "sess-skip"
 
     async def fake_qa_agent(**kwargs):
-        return "2026-04-24-001"  # returns a ticket_id to trigger HITL
-
-    async def set_skip_after_delay():
-        await asyncio.sleep(0.05)
-        event = hitl_events.get(session_id)
-        if event:
-            hitl_decisions[session_id] = "skip"
-            event.set()
+        return "2026-04-24-001"
 
     with patch("smrt_agent.agents.orchestrator.run_qa_agent", new=fake_qa_agent):
-        asyncio.create_task(set_skip_after_delay())
         status = await run_qa_session(
-            session_id=session_id,
+            session_id="sess-ticket",
             project_path=tmp_path,
             api_key="sk-test",
             model_qa="claude-sonnet-4-6",
             model_coder="claude-sonnet-4-6",
             budget_usd=1.0,
-            max_fix_attempts=3,
             queue=queue,
-            hitl_events=hitl_events,
-            hitl_decisions=hitl_decisions,
         )
 
-    assert status == "skipped"
+    assert status == "done"
+    events = []
+    while not queue.empty():
+        events.append(await queue.get())
+    assert any(e.get("type") == "hitl_request" and e.get("ticket_id") == "2026-04-24-001" for e in events)
+    assert any(e.get("status") == "done" for e in events)
 
 
 @pytest.fixture

@@ -12,15 +12,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.api.deps import get_db
+from smrt_agent.api.session_registry import session_queues
+from smrt_agent.agents import budget_gateway
 from smrt_agent.db.models import Project, QASession
 from smrt_agent.db.session import get_engine, get_session_factory
 from smrt_agent.event_log import EventLogger
+from smrt_agent.llm import LLMClient
 from smrt_agent.settings import Settings
 from smrt_agent.agents.orchestrator import run_qa_session
 
 router = APIRouter(prefix="/projects", tags=["qa-sessions"])
 
-_queues: dict[str, asyncio.Queue] = {}
 _hitl_events: dict[str, asyncio.Event] = {}
 _hitl_decisions: dict[str, str] = {}
 
@@ -40,7 +42,7 @@ async def create_qa_session(
     await db.commit()
 
     queue: asyncio.Queue = asyncio.Queue()
-    _queues[session_id] = queue
+    session_queues[session_id] = queue
 
     logged_queue = EventLogger(
         queue,
@@ -48,17 +50,24 @@ async def create_qa_session(
     )
 
     settings = Settings()
+    import json as _json
+    try:
+        stored = _json.loads(project.config or '{}')
+    except Exception:
+        stored = {}
 
     asyncio.create_task(_session_task(
         project_id=project_id,
         session_id=session_id,
         canonical_path=project.canonical_path,
         queue=logged_queue,
-        api_key=settings.anthropic_api_key,
-        model_qa=settings.model_qa,
-        model_coder=settings.model_coder,
+        llm_client=LLMClient.from_project(project.config, settings),
+        model_qa=stored.get("qa_model", settings.model_qa),
+        model_coder=stored.get("coder_model", settings.model_coder),
         budget_usd=settings.budget_per_run_usd,
-        max_fix_attempts=settings.max_fix_attempts,
+        max_fix_attempts=stored.get("max_fix_attempts", settings.max_fix_attempts),
+        max_questions_per_attempt=stored.get("max_questions_per_attempt", 0),
+        job_id=session_id,
     ))
 
     return {"session_id": session_id, "status": "pending"}
@@ -66,8 +75,9 @@ async def create_qa_session(
 
 async def _session_task(
     *, project_id: int, session_id: str, canonical_path: str,
-    queue: "EventLogger", api_key: str, model_qa: str, model_coder: str,
-    budget_usd: float, max_fix_attempts: int,
+    queue: "EventLogger", llm_client: "LLMClient", model_qa: str, model_coder: str,
+    budget_usd: float, max_fix_attempts: int, max_questions_per_attempt: int = 0,
+    job_id: str | None = None,
 ) -> None:
     final_status = "error"
     try:
@@ -87,14 +97,12 @@ async def _session_task(
         final_status = await run_qa_session(
             session_id=session_id,
             project_path=Path(canonical_path),
-            api_key=api_key,
+            llm_client=llm_client,
             model_qa=model_qa,
             model_coder=model_coder,
             budget_usd=budget_usd,
-            max_fix_attempts=max_fix_attempts,
             queue=queue,
-            hitl_events=_hitl_events,
-            hitl_decisions=_hitl_decisions,
+            job_id=job_id,
         )
     except Exception as exc:
         await queue.put({"type": "error", "message": str(exc)})
@@ -171,24 +179,37 @@ async def get_qa_session_events(
 
 @router.get("/{project_id}/qa-sessions/{session_id}/stream")
 async def stream_qa_session(project_id: int, session_id: str) -> StreamingResponse:
-    queue = _queues.get(session_id)
+    queue = session_queues.get(session_id)
     if queue is None:
         raise HTTPException(status_code=404, detail="Session not found or already completed")
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                event = await asyncio.wait_for(queue.get(), timeout=300.0)
                 yield f"data: {json.dumps(event)}\n\n"
                 if event.get("type") in ("done", "error", "budget_exceeded"):
-                    _queues.pop(session_id, None)
+                    session_queues.pop(session_id, None)
                     break
         except asyncio.TimeoutError:
             yield 'data: {"type": "timeout"}\n\n'
-            _queues.pop(session_id, None)
+            session_queues.pop(session_id, None)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/{project_id}/qa-sessions/{session_id}/budget-decision", status_code=200)
+async def qa_session_budget_decision(
+    project_id: int,
+    session_id: str,
+    body: dict,
+) -> dict:
+    decision = body.get("decision", "terminate")
+    found = budget_gateway.resolve(session_id, decision)
+    if not found:
+        raise HTTPException(status_code=409, detail="No budget pause pending for this session")
+    return {"session_id": session_id, "decision": decision}
 
 
 @router.post("/{project_id}/qa-sessions/{session_id}/approve", status_code=200)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { approveQASession, skipQASession, getQASessionEvents } from '../api/qa_sessions'
-import { AgentTimeline, type AgentEvent } from './AgentTimeline'
+import { getQASessionEvents, postSessionBudgetDecision } from '../api/qa_sessions'
+import { AgentTimeline, type AgentEvent, ThinkingDots } from './AgentTimeline'
 
 interface Props {
   projectId: number
@@ -8,45 +8,57 @@ interface Props {
   onComplete?: (status: string) => void
 }
 
+const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta'])
+
 export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const [events, setEvents] = useState<AgentEvent[]>([])
-  const [hitlTicket, setHitlTicket] = useState<string | null>(null)
   const [done, setDone] = useState(false)
-  const [actioning, setActioning] = useState(false)
-  const [totalCost, setTotalCost] = useState(0)
+  const [finalStatus, setFinalStatus] = useState<string | null>(null)
   const [showThoughts, setShowThoughts] = useState(true)
+  const [qaEarlyExit, setQaEarlyExit] = useState<string | null>(null)
+  const [budgetPause, setBudgetPause] = useState<{ cost: number; budget: number } | null>(null)
+  const [budgetDeciding, setBudgetDeciding] = useState(false)
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
+
+  const ticketsFound = useMemo(() => {
+    const ids = new Set(
+      events
+        .filter((e) => e.type === 'hitl_request' && e.ticket_id)
+        .map((e) => e.ticket_id!),
+    )
+    return ids.size
+  }, [events])
 
   useEffect(() => {
     let cancelled = false
     let liveConnected = false
 
-    // Fallback: read persisted events from JSONL when SSE is unavailable.
-    // This covers: session already done, server restart, or tab switch during
-    // a long session (the queue may have been drained by the previous SSE read).
+    function markDone(status: string) {
+      setFinalStatus(status)
+      setDone(true)
+      onCompleteRef.current?.(status)
+    }
+
     async function loadFromLog() {
       try {
         const logged = await getQASessionEvents(projectId, sessionId)
         if (!cancelled && logged.length > 0) {
           setEvents(logged)
-          const cost = logged
-            .filter((e) => e.type === 'qa_done' || e.type === 'coder_done')
-            .reduce((s, e) => s + (e.cost_usd ?? 0), 0)
-          if (cost > 0) setTotalCost(cost)
+          const earlyExit = logged.find((e) => e.type === 'qa_early_exit')
+          if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA determined fix is complete.')
           const lastDone = [...logged].reverse().find((e) =>
             ['done', 'error', 'budget_exceeded', 'timeout'].includes(e.type),
           )
           if (lastDone) {
-            setDone(true)
-            onCompleteRef.current?.(lastDone.status ?? lastDone.type)
+            markDone(lastDone.status ?? lastDone.type)
             return
           }
         }
       } catch {
-        // silently ignore — empty events list is fine
+        // silently ignore
       }
-      if (!cancelled && !liveConnected) setDone(true)
+      if (!cancelled && !liveConnected) markDone('unknown')
     }
 
     const es = new EventSource(`/api/projects/${projectId}/qa-sessions/${sessionId}/stream`)
@@ -57,19 +69,18 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
       const event: AgentEvent = JSON.parse(evt.data)
       setEvents((prev) => [...prev, event])
 
-      if (event.type === 'hitl_request' && event.ticket_id) {
-        setHitlTicket(event.ticket_id)
+      if (event.type === 'qa_early_exit') {
+        setQaEarlyExit(event.reasoning ?? 'QA determined fix is complete.')
       }
-      if (event.type === 'session_status' && event.status !== 'hitl_waiting') {
-        setHitlTicket(null)
-      }
-      if (event.type === 'qa_done' || event.type === 'coder_done') {
-        setTotalCost((prev) => prev + (event.cost_usd ?? 0))
-      }
-      if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
-        setDone(true)
+      if (event.type === 'budget_pause') {
+        setBudgetPause({ cost: event.cost_usd ?? 0, budget: event.budget_usd ?? 0 })
+      } else if (event.type === 'budget_continue') {
+        setBudgetPause(null)
+        setBudgetDeciding(false)
+      } else if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
+        setBudgetPause(null)
+        markDone(event.status ?? event.type)
         es.close()
-        onCompleteRef.current?.(event.status ?? event.type)
       }
     }
 
@@ -84,87 +95,124 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
     }
   }, [projectId, sessionId])
 
-  async function handleApprove() {
-    setActioning(true)
-    try {
-      await approveQASession(projectId, sessionId)
-      setHitlTicket(null)
-    } finally {
-      setActioning(false)
+  const lastEvent = events.length > 0 ? events[events.length - 1] : null
+  const lastSessionEvent = events.findLast?.((e) => e.type === 'session_status') ?? null
+  const lastStatus = lastSessionEvent?.status ?? null
+  const currentAttempt = lastSessionEvent?.fix_attempt ?? 0
+
+  // Ambient generation state from the most recent event
+  const isGenerating = !done && !!lastEvent && TEXT_DELTA_TYPES.has(lastEvent.type)
+  const isCallingTool = !done && lastEvent?.type === 'tool_use'
+
+  // ── Completion banner ──────────────────────────────────────────────────────
+  function DoneBar() {
+    if (finalStatus === 'error') {
+      return (
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <span className="text-red-500 text-lg leading-none mt-0.5">✗</span>
+          <div>
+            <p className="text-sm font-semibold text-red-700">Session failed</p>
+            <p className="text-xs text-red-600 mt-0.5">
+              The agent encountered an error. Check the events above for details, then start a new session.
+            </p>
+          </div>
+        </div>
+      )
     }
+    if (finalStatus === 'budget_exceeded') {
+      return (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <span className="text-amber-500 text-lg leading-none mt-0.5">⚠</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-700">Budget limit reached</p>
+            <p className="text-xs text-amber-600 mt-0.5">
+              Partial results only — increase <code className="font-mono">BUDGET_PER_RUN_USD</code> in <code className="font-mono">.env</code> to run longer sessions.
+            </p>
+          </div>
+        </div>
+      )
+    }
+    if (finalStatus === 'unknown') {
+      return (
+        <div className="flex items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+          <span className="text-gray-400 text-lg leading-none mt-0.5">?</span>
+          <div>
+            <p className="text-sm font-semibold text-gray-600">Could not connect to session stream</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              The session may not have started, or already finished before connecting. Try starting a new session.
+            </p>
+          </div>
+        </div>
+      )
+    }
+    const summary = ticketsFound > 0
+      ? `${ticketsFound} bug ticket${ticketsFound !== 1 ? 's' : ''} filed`
+      : 'No bugs found this run'
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+        <span className="text-emerald-500 text-lg leading-none">✓</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-emerald-700">Session complete</p>
+          <p className="text-xs text-emerald-600 mt-0.5">{summary}</p>
+        </div>
+      </div>
+    )
   }
-
-  async function handleSkip() {
-    setActioning(true)
-    try {
-      await skipQASession(projectId, sessionId)
-      setHitlTicket(null)
-    } finally {
-      setActioning(false)
-    }
-  }
-
-  const lastStatus = events.findLast?.((e) => e.type === 'session_status')?.status ?? null
-
-  // Live thought: accumulate text since the last tool boundary for the ticker
-  const liveThought = useMemo(() => {
-    if (done) return ''
-    let start = 0
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (['session_status', 'tool_result', 'tool_use'].includes(events[i].type)) {
-        start = i + 1
-        break
-      }
-    }
-    return events
-      .slice(start)
-      .filter((e) => ['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type))
-      .map((e) => e.text ?? '')
-      .join('')
-      .slice(-160)
-  }, [events, done])
 
   return (
     <div className="space-y-3">
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           {!done ? (
             <>
               {lastStatus?.startsWith('qa') && (
                 <div className="flex items-center gap-1.5 text-sm text-violet-600">
                   <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse inline-block" />
-                  <span className="font-medium">🧪 QA running…</span>
+                  <span className="font-medium">
+                    {lastStatus === 'qa_advising' ? '💬 QA advising coder…' : '🧪 QA agent running…'}
+                  </span>
+                  {currentAttempt > 0 && (
+                    <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-violet-100 text-violet-600">
+                      attempt {currentAttempt + 1}
+                    </span>
+                  )}
                 </div>
               )}
               {lastStatus?.startsWith('coder') && (
                 <div className="flex items-center gap-1.5 text-sm text-amber-600">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse inline-block" />
-                  <span className="font-medium">🛠️ Coder running…</span>
+                  <span className="font-medium">🛠️ Coder agent running…</span>
+                  <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-600">
+                    fix attempt {currentAttempt + 1}
+                  </span>
                 </div>
               )}
               {lastStatus === 'hitl_waiting' && (
                 <div className="flex items-center gap-1.5 text-sm text-yellow-600">
-                  <span className="animate-pulse">⏳</span>
-                  <span className="font-medium">Awaiting your approval</span>
+                  <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse inline-block" />
+                  <span className="font-medium">🔖 Filing ticket…</span>
                 </div>
               )}
               {!lastStatus && (
                 <div className="flex items-center gap-1.5 text-sm text-gray-400">
                   <span className="w-2 h-2 rounded-full bg-gray-300 animate-pulse inline-block" />
-                  <span>Starting…</span>
+                  <span>Starting session…</span>
+                </div>
+              )}
+
+              {/* Ambient generation state */}
+              {(isGenerating || isCallingTool) && (
+                <div className="flex items-center gap-1 text-xs text-gray-400 font-mono">
+                  {isGenerating ? (
+                    <>✍️ Generating<ThinkingDots /></>
+                  ) : (
+                    <>⚡ <span className="italic">{lastEvent?.tool ?? 'tool'}</span><ThinkingDots /></>
+                  )}
                 </div>
               )}
             </>
-          ) : (
-            <div className="flex items-center gap-1.5 text-sm text-emerald-600">
-              <span>✓</span>
-              <span className="font-medium">Session complete</span>
-              {totalCost > 0 && (
-                <span className="text-gray-400 font-normal">· ${totalCost.toFixed(4)}</span>
-              )}
-            </div>
-          )}
+          ) : null}
         </div>
 
         <button
@@ -180,47 +228,57 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
         </button>
       </div>
 
-      {/* Live thought ticker — shows last segment of agent reasoning in real-time */}
-      {!done && liveThought && (
-        <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-xs text-indigo-700 font-mono leading-relaxed">
-          <span className="shrink-0 opacity-60 mt-px">💭</span>
-          <span className="line-clamp-2 break-words whitespace-pre-wrap">{liveThought}</span>
+      {budgetPause && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 flex items-center justify-between gap-4">
+          <div className="text-sm text-amber-800">
+            <span className="font-semibold">Budget reached</span> — spent{' '}
+            <span className="font-mono">${budgetPause.cost.toFixed(4)}</span> of{' '}
+            <span className="font-mono">${budgetPause.budget.toFixed(2)}</span> limit.
+            Continue with +20% grace or terminate?
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={budgetDeciding}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+              onClick={async () => {
+                setBudgetDeciding(true)
+                await postSessionBudgetDecision(projectId, sessionId, 'continue').catch(() => null)
+              }}
+            >
+              Continue
+            </button>
+            <button
+              type="button"
+              disabled={budgetDeciding}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50"
+              onClick={async () => {
+                setBudgetDeciding(true)
+                await postSessionBudgetDecision(projectId, sessionId, 'terminate').catch(() => null)
+              }}
+            >
+              Terminate
+            </button>
+          </div>
         </div>
       )}
 
       <AgentTimeline events={events} showThoughts={showThoughts} />
 
-      {/* HITL approval card */}
-      {hitlTicket && !done && (
-        <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 space-y-3">
-          <div className="flex items-start gap-2">
-            <span className="text-yellow-600 text-lg">⏳</span>
-            <div>
-              <p className="text-sm font-semibold text-yellow-800">Human-in-the-Loop approval required</p>
-              <p className="text-xs text-yellow-700 mt-0.5">
-                Bug ticket <code className="font-mono bg-yellow-100 px-1 rounded">{hitlTicket}</code> was filed.
-                Approve the coder's fix attempt or skip this ticket.
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleApprove}
-              disabled={actioning}
-              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-            >
-              ✓ Approve Fix
-            </button>
-            <button
-              onClick={handleSkip}
-              disabled={actioning}
-              className="flex-1 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            >
-              Skip
-            </button>
+      {/* QA early exit banner */}
+      {qaEarlyExit && (
+        <div className="flex items-start gap-3 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 animate-fade-in">
+          <span className="text-teal-500 text-lg leading-none mt-0.5">🤖</span>
+          <div>
+            <p className="text-sm font-semibold text-teal-700">QA Advisor satisfied — loop ended early</p>
+            <p className="text-xs text-teal-600 mt-0.5 leading-relaxed">{qaEarlyExit}</p>
           </div>
         </div>
       )}
+
+      {/* Completion banner */}
+      {done && <DoneBar />}
+
     </div>
   )
 }

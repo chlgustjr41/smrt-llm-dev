@@ -25,6 +25,7 @@ class ProjectConfig(BaseModel):
     max_questions_per_attempt: int = 1
     scheduler_cadence: str = "daily_0300"
     thought_process_mode: bool = False
+    use_local_llm: bool = False
 
 
 class ProjectConfigPatch(BaseModel):
@@ -35,6 +36,7 @@ class ProjectConfigPatch(BaseModel):
     max_questions_per_attempt: int | None = None
     scheduler_cadence: str | None = None
     thought_process_mode: bool | None = None
+    use_local_llm: bool | None = None
 
 
 class RunCreatedResponse(BaseModel):

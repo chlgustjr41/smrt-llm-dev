@@ -35,6 +35,7 @@ export function ProjectsPage() {
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
+    if (!path) return
     setSubmitting(true)
     setError(null)
     try {
@@ -63,36 +64,25 @@ export function ProjectsPage() {
         />
 
         {/* Path picker */}
-        <div className="space-y-1">
-          <div className="flex gap-2">
-            <input
-              className="block flex-1 border rounded px-3 py-2 bg-gray-50"
-              placeholder="Select a folder below…"
-              value={path}
-              readOnly
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowBrowser((v) => !v)}
-              className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
-            >
-              {showBrowser ? 'Close' : 'Browse…'}
-            </button>
-          </div>
-          {showBrowser && (
-            <FileBrowser
-              onSelect={(selected) => {
-                setPath(selected)
-                setShowBrowser(false)
-              }}
-            />
-          )}
+        <div className="flex gap-2">
+          <input
+            className="block flex-1 border rounded px-3 py-2 bg-gray-50 text-sm font-mono"
+            placeholder="Click Browse… to select a folder"
+            value={path}
+            readOnly
+          />
+          <button
+            type="button"
+            onClick={() => setShowBrowser(true)}
+            className="shrink-0 border rounded px-3 py-2 text-sm hover:bg-gray-50 transition-colors"
+          >
+            Browse…
+          </button>
         </div>
 
         <button
           type="submit"
-          disabled={submitting || !path}
+          disabled={submitting || !path || !name}
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
         >
           {submitting ? 'Registering…' : 'Register project'}
@@ -119,6 +109,7 @@ export function ProjectsPage() {
                 <p className="text-gray-400 text-xs truncate">{p.canonical_path}</p>
               </div>
               <button
+                type="button"
                 onClick={() => handleDelete(p.id)}
                 disabled={deleting === p.id}
                 className="shrink-0 text-sm text-red-500 hover:text-red-700 disabled:opacity-40"
@@ -128,6 +119,17 @@ export function ProjectsPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Modal file browser — rendered outside the form so it can't trigger form submission */}
+      {showBrowser && (
+        <FileBrowser
+          onSelect={(selected) => {
+            setPath(selected)
+            setShowBrowser(false)
+          }}
+          onClose={() => setShowBrowser(false)}
+        />
       )}
     </div>
   )

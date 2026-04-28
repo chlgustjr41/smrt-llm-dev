@@ -37,6 +37,18 @@ export function skipQASession(projectId: number, sessionId: string): Promise<HIT
   })
 }
 
+export function postSessionBudgetDecision(
+  projectId: number,
+  sessionId: string,
+  decision: 'continue' | 'terminate',
+): Promise<{ session_id: string; decision: string }> {
+  return apiFetch(`/projects/${projectId}/qa-sessions/${sessionId}/budget-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  })
+}
+
 export async function getQASessionEvents(
   projectId: number,
   sessionId: string,

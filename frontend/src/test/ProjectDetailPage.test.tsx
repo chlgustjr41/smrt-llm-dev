@@ -39,18 +39,6 @@ vi.mock('../components/DocPanel', () => ({
   ),
 }))
 
-vi.mock('../components/CostChart', () => ({
-  CostChart: ({ projectId }: { projectId: number }) => (
-    <div data-testid="cost-chart">CostChart:{projectId}</div>
-  ),
-}))
-
-vi.mock('../components/DocScoreChart', () => ({
-  DocScoreChart: ({ projectId }: { projectId: number }) => (
-    <div data-testid="doc-score-chart">DocScoreChart:{projectId}</div>
-  ),
-}))
-
 const server = setupServer(
   http.get('http://localhost/api/projects/1', () =>
     HttpResponse.json({
@@ -73,15 +61,19 @@ const server = setupServer(
   http.get('http://localhost/api/projects/1/tests', () =>
     HttpResponse.json({ version: 1, tests: [] }),
   ),
-  http.get('http://localhost/api/projects/1/stats/cost', () =>
-    HttpResponse.json({ runs: [] }),
-  ),
   http.get('http://localhost/api/projects/1/stats/doc-completeness', () =>
     HttpResponse.json({ history: [] }),
   ),
-  http.get('http://localhost/api/projects/1/config', () =>
-    HttpResponse.json({ reviewer_model: 'claude-sonnet-4-6', model_coder: 'claude-sonnet-4-6', budget_per_run_usd: 1.0, max_fix_attempts: 3 }),
+  http.get('http://localhost/api/projects/1/tickets', () =>
+    HttpResponse.json([]),
   ),
+  http.get('http://localhost/api/projects/1/config', () =>
+    HttpResponse.json({ reviewer_model: 'claude-sonnet-4-6', qa_model: 'claude-sonnet-4-6', coder_model: 'claude-sonnet-4-6', max_fix_attempts: 3, max_questions_per_attempt: 1, scheduler_cadence: 'daily_0300', thought_process_mode: false, use_local_llm: false }),
+  ),
+  http.get('http://localhost/api/llm-provider', () =>
+    HttpResponse.json({ provider: 'anthropic' }),
+  ),
+
 )
 
 beforeAll(() => server.listen())
@@ -202,14 +194,10 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('doc-panel')).toBeInTheDocument())
   })
 
-  it('renders the CostChart dashboard section', async () => {
+  it('renders Ticket Status and Test Status dashboard sections', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getByTestId('cost-chart')).toBeInTheDocument())
-  })
-
-  it('renders the DocScoreChart dashboard section', async () => {
-    renderPage()
-    await waitFor(() => expect(screen.getByTestId('doc-score-chart')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Ticket Status')).toBeInTheDocument())
+    expect(screen.getByText('Test Status')).toBeInTheDocument()
   })
 
   it('shows Tests tab in the tab bar', async () => {

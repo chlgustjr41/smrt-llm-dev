@@ -44,6 +44,17 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "version": app.version}
 
+    @app.get("/llm-provider")
+    async def llm_provider() -> dict:
+        s = Settings()
+        if s.use_local_llm:
+            return {
+                "provider": "local",
+                "base_url": s.local_llm_base_url,
+                "model": s.local_llm_model,
+            }
+        return {"provider": "anthropic"}
+
     app.include_router(filesystem_router)
     app.include_router(projects_router)
     app.include_router(sandbox_router)

@@ -33,8 +33,16 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Required
-    anthropic_api_key: str = Field(..., description="Anthropic API key")
+    # Required when not using local LLM
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
+
+    # Local LLM (LM Studio or any OpenAI-compatible server)
+    # Set USE_LOCAL_LLM=true to prefer local over Anthropic regardless of whether
+    # a key is present (most local servers don't require auth).
+    use_local_llm: bool = Field(default=False, alias="use_local_llm")
+    local_llm_api_key: str = Field(default="", alias="local_llm_api_key")
+    local_llm_base_url: str = Field(default="http://localhost:1234/v1", alias="local_llm_base_url")
+    local_llm_model: str = Field(default="local-model", alias="local_llm_model")
 
     # Bind address
     bind_host: str = Field(default="127.0.0.1", alias="smrt_bind_host")
@@ -43,6 +51,7 @@ class Settings(BaseSettings):
 
     # Budget guardrails
     budget_per_run_usd: float = Field(default=1.50, alias="smrt_budget_per_run_usd")
+    budget_per_ticket_usd: float = Field(default=0.50, alias="smrt_budget_per_ticket_usd")
     budget_per_day_usd: float = Field(default=10.00, alias="smrt_budget_per_day_usd")
 
     # Models (env overrides these; haiku is the dev default)
@@ -56,6 +65,9 @@ class Settings(BaseSettings):
 
     # Path allowlist (comma-separated)
     project_root_allowlist: str = Field(default="", alias="smrt_project_root_allowlist")
+
+    # UI defaults for new projects (overridable per-project via Config tab)
+    thought_process_mode: bool = Field(default=False, alias="smrt_thought_process_mode")
 
     # Observability
     log_level: str = Field(default="INFO", alias="smrt_log_level")

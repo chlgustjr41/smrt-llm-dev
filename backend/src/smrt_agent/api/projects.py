@@ -11,16 +11,45 @@ from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import AgentRunOut, ProjectConfig, ProjectConfigPatch, ProjectCreate, ProjectOut
 from smrt_agent.db.models import AgentRun, Project, QASession
 from smrt_agent.platform_paths import canonicalize
+from smrt_agent.settings import Settings
 
-CONFIG_DEFAULTS = {
-    "reviewer_model": "claude-haiku-4-5-20251001",
-    "qa_model": "claude-haiku-4-5-20251001",
-    "coder_model": "claude-haiku-4-5-20251001",
-    "max_fix_attempts": 5,
-    "max_questions_per_attempt": 1,
-    "scheduler_cadence": "daily_0300",
-    "thought_process_mode": False,
-}
+
+def _config_defaults() -> dict:
+    """Return per-project config defaults sourced from the current .env settings."""
+    s = Settings()
+    return {
+        "reviewer_model": s.model_reviewer,
+        "qa_model": s.model_qa,
+        "coder_model": s.model_coder,
+        "max_fix_attempts": s.max_fix_attempts,
+        "max_questions_per_attempt": s.max_questions_per_attempt,
+        "scheduler_cadence": "daily_0300",
+        "thought_process_mode": s.thought_process_mode,
+        "use_local_llm": s.use_local_llm,
+    }
+
+
+def _smrt_config_path(project_path: str) -> Path:
+    return Path(project_path) / ".smrt" / "config.json"
+
+
+def _read_smrt_config(project_path: str) -> dict:
+    """Read custom config from <project>/.smrt/config.json, empty dict if absent."""
+    path = _smrt_config_path(project_path)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _write_smrt_config(project_path: str, config: dict) -> None:
+    """Persist custom config to <project>/.smrt/config.json."""
+    path = _smrt_config_path(project_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -106,11 +135,14 @@ async def get_project_config(
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    try:
-        stored = json.loads(project.config or '{}')
-    except (json.JSONDecodeError, TypeError):
-        stored = {}
-    merged = {**CONFIG_DEFAULTS, **stored}
+    # .smrt/config.json is the canonical on-disk override; DB is the fallback.
+    stored = _read_smrt_config(project.canonical_path)
+    if not stored:
+        try:
+            stored = json.loads(project.config or '{}')
+        except (json.JSONDecodeError, TypeError):
+            stored = {}
+    merged = {**_config_defaults(), **stored}
     return ProjectConfig(**merged)
 
 
@@ -123,15 +155,20 @@ async def patch_project_config(
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    try:
-        stored = json.loads(project.config or '{}')
-    except (json.JSONDecodeError, TypeError):
-        stored = {}
+    # Load existing custom config from disk, fall back to DB
+    stored = _read_smrt_config(project.canonical_path)
+    if not stored:
+        try:
+            stored = json.loads(project.config or '{}')
+        except (json.JSONDecodeError, TypeError):
+            stored = {}
     # Merge only the provided (non-None) fields
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     stored.update(updates)
+    # Write to disk (canonical) and keep DB in sync for other API consumers
+    _write_smrt_config(project.canonical_path, stored)
     project.config = json.dumps(stored)
     await db.commit()
     await db.refresh(project)
-    merged = {**CONFIG_DEFAULTS, **json.loads(project.config)}
+    merged = {**_config_defaults(), **stored}
     return ProjectConfig(**merged)

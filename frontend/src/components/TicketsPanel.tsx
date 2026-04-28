@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import Markdown from 'react-markdown'
-import { listTickets, approveTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport } from '../api/tickets'
+import { GfmMarkdown } from './GfmMarkdown'
+import { listTickets, approveTicket, cancelTicket, closeTicket, requeueTicket, resetTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport } from '../api/tickets'
 import { getCoderStatus, type CoderStatus } from '../api/coder'
 import { getQASessionEvents } from '../api/qa_sessions'
 import { acceptPR, rejectPR } from '../api/pr'
-import { AgentTimeline, type AgentEvent } from './AgentTimeline'
+import { AgentTimeline, type AgentEvent, ExpandableLiveThought, ThinkingDots } from './AgentTimeline'
 
 // ── Column config ─────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ type ColumnConfig = {
   cardBg: string
   textCls: string
   accentCls: string
-  acceptsDrop: boolean
+  acceptsDropFrom: TicketStatus[]
 }
 
 const COLUMNS: ColumnConfig[] = [
@@ -30,7 +30,7 @@ const COLUMNS: ColumnConfig[] = [
     cardBg: 'bg-white hover:bg-orange-50',
     textCls: 'text-orange-800',
     accentCls: 'bg-orange-100 text-orange-700',
-    acceptsDrop: false,
+    acceptsDropFrom: [],
   },
   {
     status: 'in_progress',
@@ -41,7 +41,7 @@ const COLUMNS: ColumnConfig[] = [
     cardBg: 'bg-white hover:bg-blue-50',
     textCls: 'text-blue-800',
     accentCls: 'bg-blue-100 text-blue-700',
-    acceptsDrop: true,
+    acceptsDropFrom: ['pending_confirmation', 'needs_review'],
   },
   {
     status: 'qa_review',
@@ -52,7 +52,7 @@ const COLUMNS: ColumnConfig[] = [
     cardBg: 'bg-white hover:bg-violet-50',
     textCls: 'text-violet-800',
     accentCls: 'bg-violet-100 text-violet-700',
-    acceptsDrop: false,
+    acceptsDropFrom: [],
   },
   {
     status: 'needs_review',
@@ -63,7 +63,7 @@ const COLUMNS: ColumnConfig[] = [
     cardBg: 'bg-white hover:bg-yellow-50',
     textCls: 'text-yellow-800',
     accentCls: 'bg-yellow-100 text-yellow-700',
-    acceptsDrop: false,
+    acceptsDropFrom: [],
   },
   {
     status: 'closed',
@@ -74,11 +74,11 @@ const COLUMNS: ColumnConfig[] = [
     cardBg: 'bg-white hover:bg-emerald-50',
     textCls: 'text-emerald-800',
     accentCls: 'bg-emerald-100 text-emerald-700',
-    acceptsDrop: false,
+    acceptsDropFrom: ['needs_review'],
   },
 ]
 
-// ── Status badge for sessions ─────────────────────────────────────────────
+// ── Status badge helpers ──────────────────────────────────────────────────
 
 function sessionStatusBadge(status: string): string {
   const map: Record<string, string> = {
@@ -115,7 +115,241 @@ function formatRelTime(iso: string | null): string {
   return `${Math.floor(hr / 24)}d ago`
 }
 
+// ── Fix Summary tab ────────────────────────────────────────────────────────
+
+const FILE_WRITE_TOOLS = new Set([
+  'write_file', 'write_source_file', 'str_replace', 'patch_file', 'edit_file',
+  'apply_patch', 'create_file', 'append_file', 'patch_source_file',
+])
+
+function extractFilePath(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null
+  const obj = input as Record<string, unknown>
+  const p = obj.path ?? obj.file_path ?? obj.filename
+  return typeof p === 'string' ? p : null
+}
+
+function extractChangeContent(tool: string, input: unknown): { kind: string; content: string } {
+  if (!input || typeof input !== 'object') return { kind: 'unknown', content: '' }
+  const obj = input as Record<string, unknown>
+  if (tool === 'str_replace' || tool === 'patch_source_file') {
+    const old = typeof obj.old_str === 'string' ? obj.old_str : ''
+    const new_ = typeof obj.new_str === 'string' ? obj.new_str : ''
+    return { kind: 'edit', content: `− ${old.slice(0, 300)}\n+ ${new_.slice(0, 300)}` }
+  }
+  if (tool === 'patch_file' || tool === 'apply_patch') {
+    const patch = typeof obj.patch === 'string' ? obj.patch : ''
+    return { kind: 'patch', content: patch.slice(0, 600) }
+  }
+  const content = typeof obj.content === 'string' ? obj.content : ''
+  return { kind: 'write', content: content.slice(0, 600) }
+}
+
+interface FileChange {
+  path: string
+  tool: string
+  reasoning: string
+  kind: string
+  content: string
+  ts?: string
+}
+
+function groupFileChanges(events: AgentEvent[]): FileChange[] {
+  const changes: FileChange[] = []
+  let pendingText = ''
+  for (const ev of events) {
+    if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(ev.type)) {
+      pendingText += ev.text ?? ''
+    } else if (ev.type === 'tool_use' && FILE_WRITE_TOOLS.has(ev.tool ?? '')) {
+      const path = extractFilePath(ev.input)
+      if (path) {
+        const { kind, content } = extractChangeContent(ev.tool!, ev.input)
+        changes.push({ path, tool: ev.tool!, reasoning: pendingText.slice(-400).trim(), kind, content, ts: ev.ts })
+      }
+      pendingText = ''
+    } else if (ev.type === 'tool_use' || ev.type === 'tool_result' || ev.type === 'session_status') {
+      pendingText = ''
+    }
+  }
+  return changes
+}
+
+function FixSummaryTab({
+  projectId,
+  ticketId,
+  sessionId,
+}: {
+  projectId: number
+  ticketId: string
+  sessionId?: string | null
+}) {
+  const [loading, setLoading] = useState(true)
+  const [changes, setChanges] = useState<FileChange[]>([])
+  const [recheckOutput, setRecheckOutput] = useState<string | null>(null)
+  const [qaEarlyExit, setQaEarlyExit] = useState<string | null>(null)
+  const [expandedFile, setExpandedFile] = useState<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        // Use pre-known sessionId to skip one round-trip; fall back to listing sessions
+        let targetId = sessionId ?? null
+        if (!targetId) {
+          const sessions = await getTicketSessions(projectId, ticketId)
+          const done = sessions.find((s) => s.status === 'done') ?? sessions[0]
+          if (!done) { setLoading(false); return }
+          targetId = done.session_id
+        }
+        const events = await getQASessionEvents(projectId, targetId)
+        if (!cancelled) {
+          setChanges(groupFileChanges(events))
+          const rc = [...events].reverse().find((e) => e.type === 'recheck_output')
+          if (rc) setRecheckOutput(rc.output ?? null)
+          const earlyExit = events.find((e) => e.type === 'qa_early_exit')
+          if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA satisfied.')
+          setLoading(false)
+        }
+      } catch {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [projectId, ticketId, sessionId])
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 px-5 py-8 text-sm text-gray-400">
+        <span className="animate-spin">⟳</span>
+        <span>Loading fix summary…</span>
+      </div>
+    )
+  }
+
+  if (changes.length === 0) {
+    return (
+      <div className="px-5 py-8 text-sm text-gray-400 italic text-center">
+        No file modifications recorded in the fix session.
+      </div>
+    )
+  }
+
+  // Deduplicate by path for the "Files changed" header
+  const uniqueFiles = [...new Set(changes.map((c) => c.path))]
+
+  return (
+    <div className="p-5 space-y-4">
+      {/* QA early exit note */}
+      {qaEarlyExit && (
+        <div className="flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3">
+          <span className="text-teal-500">🤖</span>
+          <div>
+            <p className="text-xs font-semibold text-teal-700">QA Advisor satisfied — loop ended early</p>
+            <p className="text-xs text-teal-600 mt-0.5">{qaEarlyExit}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Files changed summary */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+          {uniqueFiles.length} file{uniqueFiles.length !== 1 ? 's' : ''} changed
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {uniqueFiles.map((f) => (
+            <span key={f} className="font-mono text-[11px] bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded">
+              {f.split('/').pop() ?? f}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-change detail */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Changes</p>
+        {changes.map((change, i) => {
+          const isOpen = expandedFile === i
+          return (
+            <div key={i} className="rounded-lg border border-gray-200 overflow-hidden">
+              {/* Header */}
+              <button
+                type="button"
+                className="w-full text-left px-3 py-2.5 flex items-center gap-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+                onClick={() => setExpandedFile(isOpen ? null : i)}
+              >
+                <span className="text-gray-400 text-[10px] w-3 text-center">{isOpen ? '▾' : '▸'}</span>
+                <span className="font-mono text-xs text-gray-700 flex-1 truncate">{change.path}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  change.kind === 'edit' ? 'bg-amber-100 text-amber-700' :
+                  change.kind === 'patch' ? 'bg-blue-100 text-blue-700' :
+                  'bg-emerald-100 text-emerald-700'
+                }`}>
+                  {change.tool}
+                </span>
+                {change.ts && (
+                  <span className="text-[10px] text-gray-400 shrink-0">
+                    {new Date(change.ts).toLocaleTimeString()}
+                  </span>
+                )}
+              </button>
+
+              {/* Expanded detail */}
+              {isOpen && (
+                <div className="border-t border-gray-100 p-3 space-y-3 animate-fade-in">
+                  {/* Agent reasoning */}
+                  {change.reasoning && (
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Why</p>
+                      <div className="prose prose-xs max-w-none text-gray-600 text-xs bg-white border border-gray-100 rounded p-2 leading-relaxed [&_p]:my-0.5 [&_code]:bg-gray-100 [&_code]:px-0.5 [&_code]:rounded [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-gray-50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
+                        <GfmMarkdown>{change.reasoning}</GfmMarkdown>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Code content */}
+                  {change.content && (
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">
+                        {change.kind === 'edit' ? 'Diff (old → new)' : 'Content'}
+                      </p>
+                      <pre className={`text-xs p-2.5 rounded-md border whitespace-pre-wrap leading-relaxed font-mono max-h-72 overflow-y-auto ${
+                        change.kind === 'edit'
+                          ? 'bg-gray-900 text-gray-100 border-gray-700'
+                          : 'bg-gray-50 text-gray-700 border-gray-200'
+                      }`}>
+                        {change.content}
+                        {change.content.length >= 600 ? '\n…(truncated)' : ''}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Final recheck output */}
+      {recheckOutput && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Final Test Run</p>
+          <pre className={`text-xs p-2.5 rounded-md border whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed ${
+            recheckOutput.includes('passed') && !recheckOutput.includes('failed')
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+          }`}>
+            {recheckOutput}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Per-session event pane (polls JSONL for live sessions) ─────────────────
+
+const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta'])
 
 function SessionEventPane({
   projectId,
@@ -129,31 +363,89 @@ function SessionEventPane({
   const [events, setEvents] = useState<AgentEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showThoughts, setShowThoughts] = useState(true)
+  // Fingerprint set survives across load()/SSE so we can dedup events that
+  // appear in both the JSONL snapshot AND the queue replay (the queue holds
+  // events not yet drained by a previous SSE consumer).
+  const seenFingerprints = useRef<Set<string>>(new Set())
+
+  const fingerprint = (e: AgentEvent): string => {
+    // ts is unique per event in practice (microsecond precision); fall back
+    // to full JSON for events that somehow lack a timestamp.
+    if (e.ts) return `${e.type}|${e.ts}|${(e.text ?? '').slice(0, 20)}`
+    return JSON.stringify(e)
+  }
+
+  const appendEvents = useCallback((incoming: AgentEvent[]) => {
+    const newOnes: AgentEvent[] = []
+    for (const e of incoming) {
+      const fp = fingerprint(e)
+      if (!seenFingerprints.current.has(fp)) {
+        seenFingerprints.current.add(fp)
+        newOnes.push(e)
+      }
+    }
+    setEvents((prev) => {
+      if (newOnes.length === 0) {
+        // First load returned nothing — drop the loading state by yielding []
+        return prev ?? []
+      }
+      return prev ? [...prev, ...newOnes] : newOnes
+    })
+  }, [])
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const data = await getQASessionEvents(projectId, session.session_id, signal)
-      if (!signal?.aborted) setEvents(data)
+      if (!signal?.aborted) appendEvents(data)
     } catch (e: unknown) {
       if (e instanceof Error && e.name !== 'AbortError') {
         setError(e.message)
       }
     }
-  }, [projectId, session.session_id])
+  }, [projectId, session.session_id, appendEvents])
 
-  // Initial load
+  // Always load JSONL snapshot first — it's the authoritative persistent history.
+  // For active sessions this gives us events that may have already been drained
+  // from the queue by a previous SSE consumer (e.g., user closed and re-opened
+  // the dialog).
   useEffect(() => {
+    seenFingerprints.current = new Set()
+    setEvents(null)
     const ac = new AbortController()
     load(ac.signal)
     return () => ac.abort()
   }, [load])
 
-  // Poll every 2 s while session is active so live events show up promptly
+  // For active sessions, also subscribe to SSE for live events. Dedup via
+  // fingerprint set ensures queue-backlog events that overlap with JSONL
+  // don't appear twice.
   useEffect(() => {
     if (!isActive) return
-    const interval = setInterval(() => load(), 2000)
-    return () => clearInterval(interval)
-  }, [isActive, load])
+    const es = new EventSource(
+      `/api/projects/${projectId}/qa-sessions/${session.session_id}/stream`,
+    )
+    es.onmessage = (e) => {
+      try {
+        const event: AgentEvent = JSON.parse(e.data)
+        appendEvents([event])
+        if (event.type === 'done' || event.type === 'error') {
+          es.close()
+          // One final load() to capture any events written to JSONL between
+          // our initial snapshot and the SSE close.
+          load()
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    }
+    es.onerror = () => {
+      es.close()
+      // SSE failed (often: session already completed, queue gone, 404).
+      // Re-load JSONL for the final authoritative snapshot.
+      load()
+    }
+    return () => es.close()
+  }, [isActive, projectId, session.session_id, load, appendEvents])
 
   // Live thought ticker — last text segment since the most recent tool boundary
   const liveThought = useMemo(() => {
@@ -167,11 +459,16 @@ function SessionEventPane({
     }
     return events
       .slice(start)
-      .filter((e) => ['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(e.type))
+      .filter((e) => TEXT_DELTA_TYPES.has(e.type))
       .map((e) => e.text ?? '')
       .join('')
-      .slice(-200)
   }, [events, isActive])
+
+  // Ambient generation state
+  const lastEvent = events && events.length > 0 ? events[events.length - 1] : null
+  const isGenerating = isActive && !!lastEvent && TEXT_DELTA_TYPES.has(lastEvent.type)
+  const isCallingTool = isActive && lastEvent?.type === 'tool_use'
+  const isTestingPhase = isActive && lastEvent?.type === 'session_status' && lastEvent.status === 'qa_checking'
 
   if (error) return (
     <p className="text-xs text-red-500 px-3 py-2">{error}</p>
@@ -186,13 +483,27 @@ function SessionEventPane({
   return (
     <div className="bg-gray-50 border-t border-gray-100 px-3 py-3 space-y-2.5">
       {/* Controls row */}
-      <div className="flex items-center justify-between gap-2">
-        {isActive && (
-          <div className="flex items-center gap-1.5 text-xs text-amber-600">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-            <span className="font-medium">Live — updates every 2 s</span>
-          </div>
-        )}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-3">
+          {isActive && (
+            <div className="flex items-center gap-1.5 text-xs text-amber-600">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="font-medium">Live</span>
+            </div>
+          )}
+          {/* Ambient generation state */}
+          {(isGenerating || isCallingTool || isTestingPhase) && (
+            <div className="flex items-center gap-1 text-xs text-gray-400 font-mono">
+              {isTestingPhase ? (
+                <>🧪 Testing<ThinkingDots /></>
+              ) : isGenerating ? (
+                <>✍️ Generating<ThinkingDots /></>
+              ) : (
+                <>⚡ <span className="italic">{lastEvent?.tool ?? 'tool'}</span><ThinkingDots /></>
+              )}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           className={`ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
@@ -206,16 +517,11 @@ function SessionEventPane({
         </button>
       </div>
 
-      {/* Live thought ticker */}
-      {isActive && liveThought && (
-        <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-100 text-xs text-indigo-700 font-mono leading-relaxed">
-          <span className="shrink-0 opacity-60 mt-px">💭</span>
-          <span className="break-words whitespace-pre-wrap line-clamp-3">{liveThought}</span>
-        </div>
-      )}
+      {/* Live thought ticker — expandable */}
+      {isActive && liveThought && <ExpandableLiveThought text={liveThought} />}
 
       {/* Timeline (scrollable) */}
-      <div className="max-h-96 overflow-y-auto pr-0.5">
+      <div className="max-h-[32rem] overflow-y-auto pr-0.5">
         <AgentTimeline events={events} showThoughts={showThoughts} />
       </div>
     </div>
@@ -241,7 +547,6 @@ function TicketSessionHistory({
     getTicketSessions(projectId, ticketId, ac.signal)
       .then((s) => {
         setSessions(s)
-        // Auto-expand the active session
         if (activeSessionId) setExpandedId(activeSessionId)
         else if (s.length > 0) setExpandedId(s[0].session_id)
       })
@@ -325,7 +630,7 @@ function FailureReportBanner({ report }: { report: TicketFailureReport }) {
   )
 }
 
-type DialogTab = 'description' | 'logs'
+type DialogTab = 'description' | 'logs' | 'fix-summary'
 
 function TicketDialog({
   ticket,
@@ -343,7 +648,9 @@ function TicketDialog({
   onReject?: () => void
 }) {
   const hasHistory = Boolean(ticket.session_id)
-  const [activeTab, setActiveTab] = useState<DialogTab>(hasHistory ? 'logs' : 'description')
+  const showFixSummary = ticket.status === 'needs_review' || ticket.status === 'closed'
+  const defaultTab: DialogTab = showFixSummary ? 'fix-summary' : hasHistory ? 'logs' : 'description'
+  const [activeTab, setActiveTab] = useState<DialogTab>(defaultTab)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -359,7 +666,7 @@ function TicketDialog({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -383,7 +690,6 @@ function TicketDialog({
           </button>
         </div>
 
-        {/* Failure report banner — only for loop-exhausted tickets */}
         {ticket.failure_report && <FailureReportBanner report={ticket.failure_report} />}
 
         {/* Tab bar */}
@@ -411,32 +717,54 @@ function TicketDialog({
             Agent Logs
             {isActive && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
           </button>
-        </div>
-
-        {/* Tab content */}
-        <div className="flex-1 overflow-y-auto">
-          {activeTab === 'description' ? (
-            <div className="p-5">
-              <div className="prose prose-sm max-w-none text-gray-700 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:bg-gray-50 [&_pre]:border [&_pre]:border-gray-200 [&_pre]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs">
-                <Markdown>{ticket.content}</Markdown>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-gray-50 min-h-full">
-              {hasHistory ? (
-                <TicketSessionHistory
-                  projectId={projectId}
-                  ticketId={ticket.id}
-                  activeSessionId={isActive ? ticket.session_id : null}
-                />
-              ) : (
-                <p className="text-xs text-gray-400 italic px-4 py-6">No agent sessions recorded yet.</p>
-              )}
-            </div>
+          {showFixSummary && hasHistory && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('fix-summary')}
+              className={`py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+                activeTab === 'fix-summary'
+                  ? 'border-yellow-500 text-yellow-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              🔧 Fix Summary
+            </button>
           )}
         </div>
 
-        {/* Accept / Reject — only for PR-ready needs_review (no failure_report) */}
+        {/* Tab content — all three panels stay mounted; CSS hides inactive ones
+            so FixSummaryTab begins fetching the instant the dialog opens */}
+        <div className="flex-1 overflow-y-auto relative">
+          <div className={activeTab !== 'description' ? 'hidden' : 'p-5'}>
+            <div className="prose prose-sm max-w-none text-gray-700 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:bg-gray-900 [&_pre]:text-gray-100 [&_pre]:border [&_pre]:border-gray-700 [&_pre]:rounded [&_pre_code]:bg-transparent [&_pre_code]:text-gray-100 [&_pre_code]:p-0 [&_code]:bg-gray-800 [&_code]:text-gray-100 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-gray-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-3 [&_td]:py-1.5">
+              <GfmMarkdown>{ticket.content}</GfmMarkdown>
+            </div>
+          </div>
+
+          {showFixSummary && hasHistory && (
+            <div className={activeTab !== 'fix-summary' ? 'hidden' : ''}>
+              <FixSummaryTab
+                projectId={projectId}
+                ticketId={ticket.id}
+                sessionId={ticket.session_id}
+              />
+            </div>
+          )}
+
+          <div className={activeTab !== 'logs' ? 'hidden' : 'bg-gray-50 min-h-full'}>
+            {hasHistory ? (
+              <TicketSessionHistory
+                projectId={projectId}
+                ticketId={ticket.id}
+                activeSessionId={isActive ? ticket.session_id : null}
+              />
+            ) : (
+              <p className="text-xs text-gray-400 italic px-4 py-6">No agent sessions recorded yet.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Accept / Reject */}
         {ticket.status === 'needs_review' && !ticket.failure_report && (onAccept || onReject) && (
           <div className="flex items-center gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50">
             <span className="text-xs text-gray-500 flex-1">Accept to merge the fix or reject to requeue it.</span>
@@ -469,15 +797,20 @@ function TicketCard({
   ticket,
   col,
   draggable,
+  onCancel,
+  onReset,
   onClick,
 }: {
   ticket: Ticket
   col: ColumnConfig
   draggable?: boolean
+  onCancel?: () => void
+  onReset?: () => void
   onClick: () => void
 }) {
   function onDragStart(e: React.DragEvent) {
     e.dataTransfer.setData('ticketId', ticket.id)
+    e.dataTransfer.setData('sourceStatus', ticket.status)
     e.dataTransfer.effectAllowed = 'move'
   }
 
@@ -486,7 +819,6 @@ function TicketCard({
   const isActive = isCoderRunning || isQaRunning
   const hasFailureReport = Boolean(ticket.failure_report)
 
-  // Truncate title to ~40 chars for the card
   const shortTitle = ticket.title.length > 48 ? ticket.title.slice(0, 46) + '…' : ticket.title
 
   return (
@@ -503,7 +835,6 @@ function TicketCard({
         <span className="text-sm text-gray-800 leading-snug flex-1">{shortTitle}</span>
       </div>
 
-      {/* Agent status badge */}
       {isCoderRunning && (
         <div className="flex items-center gap-1.5 mt-2 px-2 py-1 rounded-md bg-amber-50 border border-amber-200">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
@@ -517,8 +848,42 @@ function TicketCard({
         </div>
       )}
 
-      {draggable && !isActive && (
+      {ticket.attempt_count > 0 && !isActive && (
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+            🔄 {ticket.attempt_count} attempt{ticket.attempt_count !== 1 ? 's' : ''}
+          </span>
+          {ticket.failure_count > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-50 text-red-600 border border-red-200">
+              ✗ {ticket.failure_count} failed
+            </span>
+          )}
+        </div>
+      )}
+
+      {draggable && ticket.status === 'pending_confirmation' && (
         <p className="text-[10px] text-gray-400 mt-1.5 italic">Drag → In Progress to start Coder fix</p>
+      )}
+      {draggable && ticket.status === 'needs_review' && (
+        <p className="text-[10px] text-yellow-500 mt-1.5 italic">Drag → In Progress to retry or → Closed to dismiss</p>
+      )}
+      {ticket.status === 'in_progress' && onCancel && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCancel() }}
+          className="mt-2 w-full text-[11px] font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md px-2 py-1 transition-colors"
+        >
+          Cancel
+        </button>
+      )}
+      {ticket.status !== 'pending_confirmation' && onReset && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onReset() }}
+          className="mt-1.5 w-full text-[11px] font-medium text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md px-2 py-1 transition-colors"
+        >
+          ↺ Reset
+        </button>
       )}
       {hasFailureReport && (
         <p className="text-[10px] text-red-500 mt-1.5 font-medium">
@@ -526,7 +891,10 @@ function TicketCard({
           {' · click for insights'}
         </p>
       )}
-      {ticket.session_id && !isActive && !hasFailureReport && (
+      {ticket.status === 'needs_review' && !hasFailureReport && (
+        <p className="text-[10px] text-yellow-600 mt-1">🔧 Click to view fix summary</p>
+      )}
+      {ticket.session_id && !isActive && !hasFailureReport && ticket.status !== 'needs_review' && (
         <p className="text-[10px] text-gray-400 mt-1">↗ Click to view agent history</p>
       )}
     </div>
@@ -540,16 +908,20 @@ function KanbanColumn({
   tickets,
   onDrop,
   onTicketClick,
+  onCancel,
+  onReset,
 }: {
   col: ColumnConfig
   tickets: Ticket[]
-  onDrop?: (ticketId: string) => void
+  onDrop?: (ticketId: string, sourceStatus: TicketStatus) => void
   onTicketClick: (ticket: Ticket) => void
+  onCancel?: (ticketId: string) => void
+  onReset?: (ticketId: string) => void
 }) {
   const [dragOver, setDragOver] = useState(false)
 
   function handleDragOver(e: React.DragEvent) {
-    if (!col.acceptsDrop) return
+    if (col.acceptsDropFrom.length === 0) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setDragOver(true)
@@ -561,7 +933,8 @@ function KanbanColumn({
     e.preventDefault()
     setDragOver(false)
     const ticketId = e.dataTransfer.getData('ticketId')
-    if (ticketId) onDrop?.(ticketId)
+    const sourceStatus = e.dataTransfer.getData('sourceStatus') as TicketStatus
+    if (ticketId && col.acceptsDropFrom.includes(sourceStatus)) onDrop?.(ticketId, sourceStatus)
   }
 
   return (
@@ -582,12 +955,14 @@ function KanbanColumn({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {col.acceptsDrop && tickets.length === 0 && (
+        {col.acceptsDropFrom.length > 0 && tickets.length === 0 && (
           <div className={`flex-1 flex items-center justify-center rounded-lg border-2 border-dashed transition-colors ${
             dragOver ? 'border-blue-400' : 'border-gray-200'
           }`}>
             <p className="text-xs text-gray-400 italic text-center px-2">
-              Drop tickets here<br />to start Coder fix
+              {col.status === 'closed'
+                ? <>Drop here<br />to close ticket</>
+                : <>Drop tickets here<br />to start Coder fix</>}
             </p>
           </div>
         )}
@@ -596,11 +971,13 @@ function KanbanColumn({
             key={t.id}
             ticket={t}
             col={col}
-            draggable={col.status === 'pending_confirmation'}
+            draggable={col.status === 'pending_confirmation' || col.status === 'needs_review'}
+            onCancel={col.status === 'in_progress' ? () => onCancel?.(t.id) : undefined}
+            onReset={() => onReset?.(t.id)}
             onClick={() => onTicketClick(t)}
           />
         ))}
-        {!col.acceptsDrop && tickets.length === 0 && (
+        {col.acceptsDropFrom.length === 0 && tickets.length === 0 && (
           <p className="text-xs text-gray-400 italic px-1 pt-1">None</p>
         )}
       </div>
@@ -672,7 +1049,7 @@ function ResizeHandle({
 
 // ── Loop status banner ────────────────────────────────────────────────────
 
-function LoopStatusBanner({ projectId }: { projectId: number }) {
+function LoopStatusBanner({ projectId, refreshKey }: { projectId: number; refreshKey?: number }) {
   const [status, setStatus] = useState<CoderStatus | null>(null)
 
   const fetchStatus = useCallback(async (signal?: AbortSignal) => {
@@ -688,28 +1065,35 @@ function LoopStatusBanner({ projectId }: { projectId: number }) {
     fetchStatus(ac.signal)
     const interval = setInterval(() => fetchStatus(), 5000)
     return () => { ac.abort(); clearInterval(interval) }
-  }, [fetchStatus])
+  }, [fetchStatus, refreshKey])
 
   if (!status || status.idle) return null
 
   const isCoderRunning = status.status === 'coder_running'
   const isQaChecking = status.status === 'qa_checking'
+  const isQaAdvising = status.status === 'qa_advising'
 
   const color = isCoderRunning
     ? { border: 'border-amber-200', bg: 'bg-amber-50', dot: 'bg-amber-500', text: 'text-amber-800', badge: 'bg-amber-100 text-amber-700' }
-    : isQaChecking
+    : (isQaChecking || isQaAdvising)
       ? { border: 'border-violet-200', bg: 'bg-violet-50', dot: 'bg-violet-500', text: 'text-violet-800', badge: 'bg-violet-100 text-violet-700' }
       : { border: 'border-gray-200', bg: 'bg-gray-50', dot: 'bg-gray-400', text: 'text-gray-600', badge: 'bg-gray-100 text-gray-600' }
 
+  const agentName = isCoderRunning ? 'Coder Agent' : 'QA Agent'
+  const modelShort = status.model ? status.model.replace(/^claude-/, '') : null
   const label = isCoderRunning
-    ? 'Coder Agent — fixing bug'
-    : isQaChecking
-      ? 'QA Agent — verifying fix'
-      : `Running (${status.status})`
+    ? `${agentName} — fixing bug`
+    : isQaAdvising
+      ? `${agentName} — advising coder`
+      : isQaChecking
+        ? `${agentName} — verifying fix`
+        : `Running (${status.status})`
 
   const detail = isCoderRunning
     ? 'Editing source files…'
-    : 'Running test suite…'
+    : isQaAdvising
+      ? 'Analyzing failed tests and preparing guidance…'
+      : 'Running test suite…'
 
   return (
     <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border ${color.border} ${color.bg}`}>
@@ -717,6 +1101,11 @@ function LoopStatusBanner({ projectId }: { projectId: number }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-sm font-medium ${color.text}`}>{label}</span>
+          {modelShort && (
+            <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${color.badge} opacity-80`}>
+              {modelShort}
+            </span>
+          )}
           {status.ticket_id && (
             <span className={`font-mono text-xs px-2 py-0.5 rounded-full ${color.badge}`}>
               {status.ticket_id}
@@ -729,13 +1118,15 @@ function LoopStatusBanner({ projectId }: { projectId: number }) {
   )
 }
 
-// ── TicketsTab inner component (used from ProjectDetailPage) ───────────────
+// ── TicketsTab inner component ─────────────────────────────────────────────
 
 function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; refreshKey?: number; onReviewed?: () => void }) {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
+  const selectedTicket = selectedTicketId ? (tickets.find((t) => t.id === selectedTicketId) ?? null) : null
   const [colWidths, setColWidths] = useState([1, 1, 1, 1, 1])
+  const [bannerRefreshKey, setBannerRefreshKey] = useState(0)
   const boardRef = useRef<HTMLDivElement>(null)
 
   const fetchTickets = useCallback(async (signal?: AbortSignal) => {
@@ -756,7 +1147,6 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
     return () => controller.abort()
   }, [projectId, refreshKey, fetchTickets])
 
-  // Poll every 5s while any ticket has an active session
   useEffect(() => {
     const hasActiveSession = tickets.some(
       (t) => t.session_id && (t.status === 'in_progress' || t.status === 'qa_review'),
@@ -766,6 +1156,26 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
     return () => clearInterval(interval)
   }, [tickets, fetchTickets])
 
+  async function handleCancel(ticketId: string) {
+    setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, status: 'needs_review' } : t))
+    try {
+      await cancelTicket(projectId, ticketId)
+    } catch {
+      // ignore — backend is idempotent; re-fetch below will correct state
+    }
+    fetchTickets()
+  }
+
+  async function handleReset(ticketId: string) {
+    setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, status: 'pending_confirmation', session_id: null, attempt_count: 0, failure_count: 0 } : t))
+    try {
+      await resetTicket(projectId, ticketId)
+    } catch {
+      // re-fetch will correct state if reset failed
+    }
+    fetchTickets()
+  }
+
   if (loading) return <p className="text-xs text-gray-400 px-1 py-2">Loading tickets…</p>
   if (tickets.length === 0) {
     return <p className="text-xs text-gray-400 italic px-1 py-2">No bug tickets filed yet. Run a QA session to discover bugs.</p>
@@ -773,7 +1183,7 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
 
   return (
     <div className="space-y-3">
-      <LoopStatusBanner projectId={projectId} />
+      <LoopStatusBanner projectId={projectId} refreshKey={bannerRefreshKey} />
       <div className="overflow-x-auto">
         <div
           ref={boardRef}
@@ -791,8 +1201,12 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
               key={col.status}
               col={col}
               tickets={tickets.filter((t) => t.status === col.status)}
-              onDrop={col.acceptsDrop ? (tid) => handleDrop(tid, tickets, setTickets, projectId, fetchTickets) : undefined}
-              onTicketClick={setSelectedTicket}
+              onDrop={col.acceptsDropFrom.length > 0
+                ? (tid, src) => handleDrop(tid, src, col.status, tickets, setTickets, projectId, fetchTickets, () => setBannerRefreshKey((k) => k + 1))
+                : undefined}
+              onTicketClick={(t) => setSelectedTicketId(t.id)}
+              onCancel={col.status === 'in_progress' ? handleCancel : undefined}
+              onReset={handleReset}
             />,
             ...(i < COLUMNS.length - 1
               ? [
@@ -813,12 +1227,12 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
           ticket={selectedTicket}
           col={COLUMNS.find((c) => c.status === selectedTicket.status) ?? COLUMNS[0]}
           projectId={projectId}
-          onClose={() => setSelectedTicket(null)}
+          onClose={() => setSelectedTicketId(null)}
           onAccept={
             selectedTicket.status === 'needs_review'
               ? () => {
                   acceptPR(projectId, selectedTicket.id).then(() => { fetchTickets(); onReviewed?.() })
-                  setSelectedTicket(null)
+                  setSelectedTicketId(null)
                 }
               : undefined
           }
@@ -826,7 +1240,7 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
             selectedTicket.status === 'needs_review'
               ? () => {
                   rejectPR(projectId, selectedTicket.id).then(() => fetchTickets())
-                  setSelectedTicket(null)
+                  setSelectedTicketId(null)
                 }
               : undefined
           }
@@ -838,21 +1252,49 @@ function TicketsTab({ projectId, refreshKey, onReviewed }: { projectId: number; 
 
 async function handleDrop(
   ticketId: string,
+  sourceStatus: TicketStatus,
+  targetStatus: TicketStatus,
   tickets: Ticket[],
   setTickets: React.Dispatch<React.SetStateAction<Ticket[]>>,
   projectId: number,
   refetch: () => void,
+  refreshBanner: () => void,
 ) {
   const ticket = tickets.find((t) => t.id === ticketId)
-  if (!ticket || ticket.status !== 'pending_confirmation') return
-  setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)))
-  try {
-    const result = await approveTicket(projectId, ticketId)
-    setTickets((prev) =>
-      prev.map((t) => t.id === ticketId ? { ...t, status: 'in_progress', session_id: result.session_id } : t),
-    )
-  } catch {
-    refetch()
+  if (!ticket) return
+
+  if (sourceStatus === 'pending_confirmation' && targetStatus === 'in_progress') {
+    setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)))
+    try {
+      const result = await approveTicket(projectId, ticketId)
+      setTickets((prev) =>
+        prev.map((t) => t.id === ticketId ? { ...t, status: 'in_progress', session_id: result.session_id } : t),
+      )
+      // Sync real backend state immediately and refresh the status banner
+      refetch()
+      refreshBanner()
+    } catch {
+      refetch()
+    }
+  } else if (sourceStatus === 'needs_review' && targetStatus === 'in_progress') {
+    setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'in_progress' } : t)))
+    try {
+      const result = await requeueTicket(projectId, ticketId)
+      setTickets((prev) =>
+        prev.map((t) => t.id === ticketId ? { ...t, status: 'in_progress', session_id: result.session_id } : t),
+      )
+      refetch()
+      refreshBanner()
+    } catch {
+      refetch()
+    }
+  } else if (sourceStatus === 'needs_review' && targetStatus === 'closed') {
+    setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: 'closed' } : t)))
+    try {
+      await closeTicket(projectId, ticketId)
+    } catch {
+      refetch()
+    }
   }
 }
 

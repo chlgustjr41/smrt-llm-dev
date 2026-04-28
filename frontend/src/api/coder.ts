@@ -5,6 +5,7 @@ export interface CoderStatus {
   session_id: string | null
   status: string | null
   ticket_id: string | null
+  model: string | null
 }
 
 export async function getCoderStatus(projectId: number, signal?: AbortSignal): Promise<CoderStatus> {

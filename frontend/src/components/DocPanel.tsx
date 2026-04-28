@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react'
 import { listDocs, type DocFile } from '../api/docs'
 
 const BACKENDS = [
-  { id: 'github', label: 'GitHub', enabled: true },
   { id: 'obsidian', label: 'Obsidian', enabled: true },
+  { id: 'github', label: 'GitHub', enabled: false },
   { id: 'jira', label: 'Jira', enabled: false },
   { id: 'confluence', label: 'Confluence', enabled: false },
 ] as const

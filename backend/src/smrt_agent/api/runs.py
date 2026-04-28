@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.agents.reviewer.loop import run_reviewer
+from smrt_agent.agents import budget_gateway
 from smrt_agent.docs.service import generate_docs
 from smrt_agent.knowledge import compute_doc_score, record_doc_score
 from smrt_agent.api.deps import get_db
@@ -19,6 +20,7 @@ from smrt_agent.api.schemas import RunCreatedResponse
 from smrt_agent.db.models import AgentRun, Project
 from smrt_agent.db.session import get_engine, get_session_factory
 from smrt_agent.event_log import EventLogger
+from smrt_agent.llm import LLMClient
 from smrt_agent.settings import Settings
 
 router = APIRouter(prefix="/projects", tags=["runs"])
@@ -57,9 +59,10 @@ async def create_run(
             canonical_path=project.canonical_path,
             run_id=run_id,
             queue=logged_queue,
-            api_key=settings.anthropic_api_key,
+            llm_client=LLMClient.from_project(project.config, settings),
             model=settings.model_reviewer,
             budget_usd=settings.budget_per_run_usd,
+            job_id=run_id,
         )
     )
 
@@ -72,9 +75,10 @@ async def _run_task(
     canonical_path: str,
     run_id: str,
     queue: "EventLogger",
-    api_key: str,
+    llm_client: "LLMClient",
     model: str,
     budget_usd: float,
+    job_id: str | None = None,
 ) -> None:
     final_status = "error"
     try:
@@ -94,12 +98,30 @@ async def _run_task(
 
         await run_reviewer(
             project_path=Path(canonical_path),
-            api_key=api_key,
+            llm_client=llm_client,
             model=model,
             budget_usd=budget_usd,
             queue=queue,
+            job_id=job_id,
         )
         final_status = "done"
+
+        # Persist done status immediately — the "done" SSE event was just queued;
+        # updating the DB here ensures listRuns refetches see the final status
+        # before doc generation (which can take several seconds) begins.
+        try:
+            engine = get_engine(force_new=False)
+            Session = get_session_factory(engine)
+            async with Session() as db:
+                result = await db.execute(select(AgentRun).where(AgentRun.run_id == run_id))
+                run = result.scalar_one_or_none()
+                if run:
+                    run.status = "done"
+                    run.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+        except Exception:
+            pass
+
         # Generate docs after audit — best-effort, does not affect run status
         try:
             doc_counts = await generate_docs(Path(canonical_path))
@@ -122,19 +144,33 @@ async def _run_task(
         await queue.put({"type": "error", "message": str(exc)})
         final_status = "error"
     finally:
-        # Update final status in DB — also best-effort
-        try:
-            engine = get_engine(force_new=False)
-            Session = get_session_factory(engine)
-            async with Session() as db:
-                result = await db.execute(select(AgentRun).where(AgentRun.run_id == run_id))
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = final_status
-                    run.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-        except Exception:
-            pass
+        # Update final status in DB for error cases (done is already committed above).
+        if final_status != "done":
+            try:
+                engine = get_engine(force_new=False)
+                Session = get_session_factory(engine)
+                async with Session() as db:
+                    result = await db.execute(select(AgentRun).where(AgentRun.run_id == run_id))
+                    run = result.scalar_one_or_none()
+                    if run:
+                        run.status = final_status
+                        run.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+            except Exception:
+                pass
+
+
+@router.post("/{project_id}/runs/{run_id}/budget-decision", status_code=200)
+async def run_budget_decision(
+    project_id: int,
+    run_id: str,
+    body: dict,
+) -> dict:
+    decision = body.get("decision", "terminate")
+    found = budget_gateway.resolve(run_id, decision)
+    if not found:
+        raise HTTPException(status_code=409, detail="No budget pause pending for this run")
+    return {"run_id": run_id, "decision": decision}
 
 
 @router.get("/{project_id}/runs/{run_id}/events")
@@ -169,7 +205,7 @@ async def stream_run(project_id: int, run_id: str) -> StreamingResponse:
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                event = await asyncio.wait_for(queue.get(), timeout=300.0)
                 yield f"data: {json.dumps(event)}\n\n"
                 if event.get("type") in ("done", "error", "budget_exceeded"):
                     _queues.pop(run_id, None)
