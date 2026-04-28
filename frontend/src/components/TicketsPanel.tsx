@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { GfmMarkdown } from './GfmMarkdown'
-import { listTickets, approveTicket, cancelTicket, closeTicket, requeueTicket, resetTicket, getTicketSessions, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport } from '../api/tickets'
+import { listTickets, approveTicket, cancelTicket, closeTicket, requeueTicket, resetTicket, getTicketSessions, getFixSummary, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport, type FixSummary, type FixSummaryChange } from '../api/tickets'
 import { getCoderStatus, type CoderStatus } from '../api/coder'
 import { getQASessionEvents } from '../api/qa_sessions'
 import { acceptPR, rejectPR } from '../api/pr'
@@ -187,13 +187,38 @@ function FixSummaryTab({
   const [changes, setChanges] = useState<FileChange[]>([])
   const [recheckOutput, setRecheckOutput] = useState<string | null>(null)
   const [qaEarlyExit, setQaEarlyExit] = useState<string | null>(null)
+  const [finalStatus, setFinalStatus] = useState<string | null>(null)
+  const [completedAt, setCompletedAt] = useState<string | null>(null)
+  const [source, setSource] = useState<'persisted' | 'reconstructed' | null>(null)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        // Use pre-known sessionId to skip one round-trip; fall back to listing sessions
+        // Preferred path: server-persisted summary written at the end of the
+        // fix loop. This survives event-log rotation and is O(1) to fetch.
+        const persisted = await getFixSummary(projectId, ticketId).catch(() => null)
+        if (!cancelled && persisted) {
+          setChanges(persisted.changes.map((c: FixSummaryChange) => ({
+            path: c.path,
+            tool: c.tool,
+            reasoning: c.reasoning,
+            kind: c.kind,
+            content: c.content,
+            ts: c.ts ?? undefined,
+          })))
+          setRecheckOutput(persisted.recheck_output)
+          setQaEarlyExit(persisted.qa_early_exit)
+          setFinalStatus(persisted.final_status)
+          setCompletedAt(persisted.completed_at)
+          setSource('persisted')
+          setLoading(false)
+          return
+        }
+
+        // Fallback: rebuild from JSONL events (legacy path; covers active
+        // sessions whose summary file hasn't been written yet).
         let targetId = sessionId ?? null
         if (!targetId) {
           const sessions = await getTicketSessions(projectId, ticketId)
@@ -208,6 +233,7 @@ function FixSummaryTab({
           if (rc) setRecheckOutput(rc.output ?? null)
           const earlyExit = events.find((e) => e.type === 'qa_early_exit')
           if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA satisfied.')
+          setSource('reconstructed')
           setLoading(false)
         }
       } catch {
@@ -227,45 +253,92 @@ function FixSummaryTab({
     )
   }
 
-  if (changes.length === 0) {
+  // No persisted summary AND no reconstructed events — show a friendly empty
+  // state. This is the normal state for tickets that haven't entered the fix
+  // loop yet (e.g. fresh pending_confirmation).
+  if (changes.length === 0 && !recheckOutput && !qaEarlyExit && !finalStatus) {
     return (
       <div className="px-5 py-8 text-sm text-gray-400 italic text-center">
-        No file modifications recorded in the fix session.
+        No fix session has been recorded for this ticket yet. Drag the ticket
+        to <span className="font-medium">In Progress</span> to start one.
       </div>
     )
   }
+
+  // Header banner: tells the user *which* session this summary is from and
+  // whether the data came from the persistent store or was reconstructed
+  // on-the-fly. Useful when verifying that a closed ticket still surfaces
+  // its fix history after a server restart.
+  const headerBanner = (finalStatus || completedAt) && (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 flex items-center gap-2 flex-wrap">
+      {finalStatus && (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-gray-400">Final status:</span>
+          <span className={`font-mono font-medium ${
+            finalStatus === 'done' ? 'text-emerald-700'
+            : finalStatus === 'loop_exhausted' ? 'text-yellow-700'
+            : 'text-red-600'
+          }`}>{finalStatus}</span>
+        </span>
+      )}
+      {completedAt && (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-gray-400">·</span>
+          <span className="text-gray-500">{formatRelTime(completedAt)}</span>
+        </span>
+      )}
+      {source === 'persisted' && (
+        <span className="ml-auto text-[10px] text-gray-400 italic">
+          📌 Persisted summary
+        </span>
+      )}
+    </div>
+  )
 
   // Deduplicate by path for the "Files changed" header
   const uniqueFiles = [...new Set(changes.map((c) => c.path))]
 
   return (
     <div className="p-5 space-y-4">
+      {headerBanner}
+
       {/* QA early exit note */}
       {qaEarlyExit && (
         <div className="flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3">
           <span className="text-teal-500">🤖</span>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-teal-700">QA Advisor satisfied — loop ended early</p>
-            <p className="text-xs text-teal-600 mt-0.5">{qaEarlyExit}</p>
+            <div className="prose prose-xs max-w-none text-xs text-teal-700 mt-0.5 leading-relaxed [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_code]:bg-teal-100 [&_code]:px-0.5 [&_code]:rounded [&_pre]:bg-teal-100/60 [&_pre]:border [&_pre]:border-teal-200 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-teal-300 [&_th]:bg-teal-100/60 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-teal-200 [&_td]:px-2 [&_td]:py-1">
+              <GfmMarkdown>{qaEarlyExit}</GfmMarkdown>
+            </div>
           </div>
         </div>
       )}
 
       {/* Files changed summary */}
-      <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          {uniqueFiles.length} file{uniqueFiles.length !== 1 ? 's' : ''} changed
-        </p>
-        <div className="flex flex-wrap gap-1.5">
-          {uniqueFiles.map((f) => (
-            <span key={f} className="font-mono text-[11px] bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded">
-              {f.split('/').pop() ?? f}
-            </span>
-          ))}
+      {changes.length > 0 ? (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            {uniqueFiles.length} file{uniqueFiles.length !== 1 ? 's' : ''} changed
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {uniqueFiles.map((f) => (
+              <span key={f} className="font-mono text-[11px] bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded">
+                {f.split('/').pop() ?? f}
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        // Loop ended without any source-file modifications. Common when CASE C
+        // (test_faulty) fires before the coder writes anything actionable.
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-500 italic">
+          No source files were modified during this fix session.
+        </div>
+      )}
 
-      {/* Per-change detail */}
+      {/* Per-change detail — only render the section when there are changes */}
+      {changes.length > 0 && (
       <div className="space-y-2">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Changes</p>
         {changes.map((change, i) => {
@@ -329,6 +402,7 @@ function FixSummaryTab({
           )
         })}
       </div>
+      )}
 
       {/* Final recheck output */}
       {recheckOutput && (
@@ -608,23 +682,52 @@ function TicketSessionHistory({
 // ── Ticket detail dialog ──────────────────────────────────────────────────
 
 function FailureReportBanner({ report }: { report: TicketFailureReport }) {
-  const isNotBug = report.recommendation === 'possibly_not_a_bug'
+  // Per-recommendation theming. Each variant gets its own colour palette,
+  // headline, and call-to-action so reviewers can tell at a glance whether
+  // the ticket needs (a) more compute, (b) re-triage, or (c) a test rewrite.
+  const meta = (() => {
+    switch (report.recommendation) {
+      case 'possibly_not_a_bug':
+        return {
+          containerCls: 'bg-orange-50 border-orange-200',
+          textCls: 'text-orange-700',
+          headline: '⚠ Possibly not a real bug',
+          chipCls: 'bg-orange-100 border-orange-300 text-orange-800',
+          chipText: '📋 Recommend: review ticket validity or add targeted tests',
+        }
+      case 'test_faulty':
+        return {
+          containerCls: 'bg-yellow-50 border-yellow-200',
+          textCls: 'text-yellow-800',
+          headline: '🧪 Generated test is faulty — needs update',
+          chipCls: 'bg-yellow-100 border-yellow-300 text-yellow-900',
+          chipText:
+            '✏️ Recommend: update the test file as described, then re-queue this ticket',
+        }
+      default:
+        return {
+          containerCls: 'bg-red-50 border-red-200',
+          textCls: 'text-red-700',
+          headline: '⚠ Fix loop exhausted — needs more attempts',
+          chipCls: 'bg-blue-50 border-blue-200 text-blue-700',
+          chipText:
+            '🔄 Recommend: increase max_fix_attempts or review coder changes manually',
+        }
+    }
+  })()
+
   return (
-    <div className={`border-b px-5 py-3 space-y-2 ${isNotBug ? 'bg-orange-50 border-orange-200' : 'bg-red-50 border-red-200'}`}>
+    <div className={`border-b px-5 py-3 space-y-2 ${meta.containerCls}`}>
       <div className="flex items-center gap-2">
-        <span className={`text-sm font-semibold ${isNotBug ? 'text-orange-700' : 'text-red-700'}`}>
-          {isNotBug ? '⚠ Possibly not a real bug' : '⚠ Fix loop exhausted — needs more attempts'}
-        </span>
+        <span className={`text-sm font-semibold ${meta.textCls}`}>{meta.headline}</span>
       </div>
-      <p className={`text-xs leading-relaxed ${isNotBug ? 'text-orange-700' : 'text-red-700'}`}>
-        {report.analysis}
-      </p>
-      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full font-medium border ${
-        isNotBug
-          ? 'bg-orange-100 border-orange-300 text-orange-800'
-          : 'bg-blue-50 border-blue-200 text-blue-700'
-      }`}>
-        {isNotBug ? '📋 Recommend: review ticket validity or add targeted tests' : '🔄 Recommend: increase max_fix_attempts or review coder changes manually'}
+      {/* Render the analysis through GfmMarkdown — for test_faulty cases the
+          QA Advisor often includes a code block with the corrected test. */}
+      <div className={`prose prose-xs max-w-none text-xs leading-relaxed ${meta.textCls} [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_pre]:bg-white/60 [&_pre]:border [&_pre]:border-current/20 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_code]:bg-white/60 [&_code]:px-0.5 [&_code]:rounded`}>
+        <GfmMarkdown>{report.analysis}</GfmMarkdown>
+      </div>
+      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full font-medium border ${meta.chipCls}`}>
+        {meta.chipText}
       </span>
     </div>
   )
@@ -648,8 +751,19 @@ function TicketDialog({
   onReject?: () => void
 }) {
   const hasHistory = Boolean(ticket.session_id)
-  const showFixSummary = ticket.status === 'needs_review' || ticket.status === 'closed'
-  const defaultTab: DialogTab = showFixSummary ? 'fix-summary' : hasHistory ? 'logs' : 'description'
+  // Fix Summary is a durable, persisted artifact that is generated at the end
+  // of every fix-loop run. Show the tab whenever any session has run for this
+  // ticket — reviewers shouldn't lose access to "what changed" just because
+  // the ticket bounced back to in_progress for another attempt.
+  const showFixSummary = hasHistory
+  // Prefer Fix Summary as the default tab when the loop has actually
+  // concluded (needs_review / closed). For mid-flight tickets the live Agent
+  // Logs view is more useful, so keep it as the default there.
+  const isLoopFinished = ticket.status === 'needs_review' || ticket.status === 'closed'
+  const defaultTab: DialogTab =
+    showFixSummary && isLoopFinished ? 'fix-summary'
+    : hasHistory ? 'logs'
+    : 'description'
   const [activeTab, setActiveTab] = useState<DialogTab>(defaultTab)
 
   useEffect(() => {
@@ -885,12 +999,20 @@ function TicketCard({
           ↺ Reset
         </button>
       )}
-      {hasFailureReport && (
-        <p className="text-[10px] text-red-500 mt-1.5 font-medium">
-          ⚠ {ticket.failure_report?.recommendation === 'possibly_not_a_bug' ? 'Possibly not a bug' : 'Fix loop exhausted'}
-          {' · click for insights'}
-        </p>
-      )}
+      {hasFailureReport && (() => {
+        const rec = ticket.failure_report?.recommendation
+        const label =
+          rec === 'possibly_not_a_bug' ? 'Possibly not a bug'
+          : rec === 'test_faulty' ? 'Test needs update'
+          : 'Fix loop exhausted'
+        const cls = rec === 'test_faulty' ? 'text-yellow-700' : 'text-red-500'
+        const icon = rec === 'test_faulty' ? '🧪' : '⚠'
+        return (
+          <p className={`text-[10px] ${cls} mt-1.5 font-medium`}>
+            {icon} {label}{' · click for insights'}
+          </p>
+        )
+      })()}
       {ticket.status === 'needs_review' && !hasFailureReport && (
         <p className="text-[10px] text-yellow-600 mt-1">🔧 Click to view fix summary</p>
       )}

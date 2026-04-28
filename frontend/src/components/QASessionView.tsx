@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { getQASessionEvents, postSessionBudgetDecision } from '../api/qa_sessions'
 import { AgentTimeline, type AgentEvent, ThinkingDots } from './AgentTimeline'
+import { GfmMarkdown } from './GfmMarkdown'
 
 interface Props {
   projectId: number
@@ -21,12 +22,22 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
+  // Count distinct tickets filed in this session. The backend emits exactly
+  // one `hitl_request` per session (carrying the *last* ticket_id), but the
+  // QA agent may file multiple tickets via the `write_bug_ticket` tool. The
+  // tool returns the new ticket_id as its result — so unioning hitl_request
+  // ids with successful write_bug_ticket results gives the true count.
   const ticketsFound = useMemo(() => {
-    const ids = new Set(
-      events
-        .filter((e) => e.type === 'hitl_request' && e.ticket_id)
-        .map((e) => e.ticket_id!),
-    )
+    const ids = new Set<string>()
+    for (const e of events) {
+      if (e.type === 'hitl_request' && e.ticket_id) ids.add(e.ticket_id)
+      if (e.type === 'tool_result' && e.tool === 'write_bug_ticket' && e.result) {
+        // Result strings start with the ticket_id; trim any pytest-output
+        // suffix the backend may have appended.
+        const trimmed = e.result.trim().split(/\s+/)[0]
+        if (trimmed) ids.add(trimmed)
+      }
+    }
     return ids.size
   }, [events])
 
@@ -269,9 +280,11 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
       {qaEarlyExit && (
         <div className="flex items-start gap-3 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 animate-fade-in">
           <span className="text-teal-500 text-lg leading-none mt-0.5">🤖</span>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-teal-700">QA Advisor satisfied — loop ended early</p>
-            <p className="text-xs text-teal-600 mt-0.5 leading-relaxed">{qaEarlyExit}</p>
+            <div className="prose prose-xs max-w-none text-xs text-teal-700 mt-0.5 leading-relaxed [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_code]:bg-teal-100 [&_code]:px-0.5 [&_code]:rounded [&_pre]:bg-teal-100/60 [&_pre]:border [&_pre]:border-teal-200 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-teal-300 [&_th]:bg-teal-100/60 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-teal-200 [&_td]:px-2 [&_td]:py-1">
+              <GfmMarkdown>{qaEarlyExit}</GfmMarkdown>
+            </div>
           </div>
         </div>
       )}

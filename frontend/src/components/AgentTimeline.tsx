@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { GfmMarkdown } from './GfmMarkdown'
 
 export interface AgentEvent {
@@ -36,6 +36,11 @@ interface AgentPhase {
   agentType: string
   startTs?: string
   textEvents: AgentEvent[]
+  // Text grouped by tool-call boundaries: each entry is the chunk of agent
+  // "thoughts" emitted between two tool calls (or between a phase boundary
+  // and the next tool call). Joined with blank-line separators for display so
+  // each separate reasoning step gets visual breathing room.
+  textSegments: string[]
   toolPairs: ToolCallPair[]
   recheckEvent: AgentEvent | null
   rejectionEvent: AgentEvent | null
@@ -94,10 +99,25 @@ export function ThinkingDots() {
   return <span className="inline-block w-3.5 text-left">{'.'.repeat(count)}</span>
 }
 
-/** Expandable live thought ticker — used in QASessionView and SessionEventPane */
+/** Expandable live thought ticker — used in QASessionView and SessionEventPane.
+ *
+ * Streams a "tail -f" view of the agent's most recent thoughts. When the text
+ * grows beyond the collapsed clip height, the view auto-scrolls so the tail
+ * (most recent content) is always visible — readers care about *what the
+ * agent is thinking right now*, not what it said when the run began.
+ * `line-clamp` would do the opposite (show the head and hide the tail), which
+ * is why we use `max-h + overflow-y` plus a scrollTop effect. */
 export function ExpandableLiveThought({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   const isLong = text.length > 140
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Tail-follow: every time text changes (or expansion toggles), pin the view
+  // to the bottom so the newest tokens stay visible.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [text, expanded])
 
   return (
     <div
@@ -106,14 +126,16 @@ export function ExpandableLiveThought({ text }: { text: string }) {
       title={isLong ? (expanded ? 'Click to collapse' : 'Click to expand') : undefined}
     >
       <span className="shrink-0 opacity-60 mt-px animate-pulse">💭</span>
-      <span
-        key={Math.floor(text.length / 30)}
-        className={`break-words whitespace-pre-wrap flex-1 animate-fade-in ${!expanded && isLong ? 'line-clamp-3' : ''}`}
+      <div
+        ref={scrollRef}
+        className={`break-words whitespace-pre-wrap flex-1 animate-fade-in overflow-y-auto ${
+          expanded ? 'max-h-64' : 'max-h-12'
+        }`}
       >
         {text}
         {/* blinking cursor signals active generation */}
         <span className="ml-0.5 animate-blink opacity-60">▋</span>
-      </span>
+      </div>
       {isLong && (
         <span className="shrink-0 text-indigo-400 text-[10px] mt-0.5 select-none">
           {expanded ? '↑' : '↓'}
@@ -157,29 +179,53 @@ function stripMarkdown(text: string): string {
     .trim()
 }
 
-function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase[] {
-  const phases: AgentPhase[] = []
-  let toolUseQueue: Array<{ event: AgentEvent; reasoning: string }> = []
-  let pendingText = ''
-
-  let current: AgentPhase = {
-    id: 'default',
-    label: defaultLabel,
-    agentType: defaultLabel.toLowerCase().includes('reviewer') ? 'reviewer' : 'qa',
+function makePhase(
+  id: string,
+  label: string,
+  agentType: string,
+  startTs?: string,
+): AgentPhase {
+  return {
+    id,
+    label,
+    agentType,
+    startTs,
     textEvents: [],
+    textSegments: [],
     toolPairs: [],
     recheckEvent: null,
     rejectionEvent: null,
     errorEvent: null,
   }
+}
+
+function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase[] {
+  const phases: AgentPhase[] = []
+  let toolUseQueue: Array<{ event: AgentEvent; reasoning: string }> = []
+  let pendingText = ''
+
+  let current: AgentPhase = makePhase(
+    'default',
+    defaultLabel,
+    defaultLabel.toLowerCase().includes('reviewer') ? 'reviewer' : 'qa',
+  )
+
+  function flushSegment() {
+    // Capture the run of text since the last tool_use (or phase start) as a
+    // discrete segment. Joining segments with a blank line gives readers a
+    // clear break between successive reasoning steps.
+    const trimmed = pendingText.trim()
+    if (trimmed) current.textSegments.push(trimmed)
+    pendingText = ''
+  }
 
   for (const event of events) {
     if (event.type === 'session_status' && event.status) {
+      flushSegment()
       toolUseQueue.forEach(({ event: use, reasoning }) =>
         current.toolPairs.push({ use, result: null, reasoning }),
       )
       toolUseQueue = []
-      pendingText = ''
       if (
         current.textEvents.length > 0 ||
         current.toolPairs.length > 0 ||
@@ -188,23 +234,30 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
       ) {
         phases.push(current)
       }
-      current = {
-        id: `${event.status}-${event.fix_attempt ?? 0}-${phases.length}`,
-        label: makePhaseLabel(event.status, event.fix_attempt),
-        agentType: agentFromStatus(event.status),
-        startTs: event.ts,
-        textEvents: [],
-        toolPairs: [],
-        recheckEvent: null,
-        rejectionEvent: null,
-        errorEvent: null,
+      // Terminal statuses get a dedicated banner above the timeline (the
+      // green "Session complete" or yellow "Needs Review" failure-report
+      // card) — suppressing the empty in-timeline phase avoids duplicate
+      // signaling and reduces visual noise. Use a sentinel phase (no startTs,
+      // no events) that the final push check will skip.
+      if (event.status === 'done' || event.status === 'loop_exhausted') {
+        current = makePhase(`terminal-${event.status}`, '', 'system')
+      } else {
+        current = makePhase(
+          `${event.status}-${event.fix_attempt ?? 0}-${phases.length}`,
+          makePhaseLabel(event.status, event.fix_attempt),
+          agentFromStatus(event.status),
+          event.ts,
+        )
       }
     } else if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(event.type)) {
       current.textEvents.push(event)
       pendingText += event.text ?? ''
     } else if (event.type === 'tool_use') {
-      toolUseQueue.push({ event, reasoning: pendingText })
-      pendingText = ''
+      // A tool call ends the current text segment — push it before queuing
+      // the tool, and grab a copy as the tool's "Why" reasoning.
+      const reasoning = pendingText
+      flushSegment()
+      toolUseQueue.push({ event, reasoning })
     } else if (event.type === 'tool_result') {
       const queued = toolUseQueue.shift()
       if (queued) current.toolPairs.push({ use: queued.event, result: event, reasoning: queued.reasoning })
@@ -217,11 +270,15 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
     }
   }
 
+  // Final flush of trailing text and any orphan tool_use blocks that never
+  // received a result.
+  flushSegment()
   toolUseQueue.forEach(({ event: use, reasoning }) =>
     current.toolPairs.push({ use, result: null, reasoning }),
   )
   // Always push phases explicitly started by a session_status event (startTs set),
   // so live in-progress phases (e.g. qa_advising with no text yet) appear immediately.
+  // The terminal-done sentinel has no startTs, so it is naturally skipped here.
   if (
     current.textEvents.length > 0 ||
     current.toolPairs.length > 0 ||
@@ -317,11 +374,26 @@ function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: strin
 }
 
 /** Renders accumulated agent thoughts as collapsible markdown prose.
- *  Has two levels of expansion: scrollable (default) and fully expanded. */
+ *  Has two levels of expansion: scrollable (default) and fully expanded.
+ *
+ *  When in clipped (scrollable) mode, the inner viewport auto-scrolls to the
+ *  bottom whenever the text changes, so the latest reasoning is always
+ *  visible without the user having to scroll manually — same "tail -f" feel
+ *  as the live thought ticker above. */
 function ThoughtBubble({ text, agentType }: { text: string; agentType: string }) {
   const [open, setOpen] = useState(true)
   const [fullyExpanded, setFullyExpanded] = useState(false)
   const meta = AGENT_META[agentType] ?? AGENT_META.system
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Tail-follow when collapsed/clipped. We skip the auto-scroll when fully
+  // expanded so the user can scroll up freely without us yanking them down.
+  useEffect(() => {
+    if (!open || fullyExpanded) return
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [text, open, fullyExpanded])
+
   if (!text.trim()) return null
 
   const CLIP_HEIGHT = 'max-h-64'
@@ -346,6 +418,7 @@ function ThoughtBubble({ text, agentType }: { text: string; agentType: string })
         <div className="animate-fade-in">
           {/* prose content — clipped by default, fully expandable */}
           <div
+            ref={scrollRef}
             className={`px-3 pb-1 overflow-y-auto transition-all ${fullyExpanded ? '' : CLIP_HEIGHT}`}
           >
             <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0 [&_code]:bg-white/60 [&_code]:px-0.5 [&_code]:rounded text-xs leading-relaxed pt-2 [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-white/40 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
@@ -382,12 +455,30 @@ function AgentBadge({ agentType, label }: { agentType: string; label: string }) 
 function PhaseSection({
   phase,
   showThoughts,
+  collapseSignal,
 }: {
   phase: AgentPhase
   showThoughts: boolean
+  /** Bumped when the parent Collapse-all/Expand-all toggle fires. The signal
+   *  is { value, version } — when `version` changes, the section adopts the
+   *  new collapsed state. After that the user can still toggle individually
+   *  by clicking the header (local state takes back over until the next
+   *  signal bump). */
+  collapseSignal?: { value: boolean; version: number }
 }) {
   const [collapsed, setCollapsed] = useState(false)
-  const text = phase.textEvents.map((e) => e.text ?? '').join('')
+  // React to parent collapse-all signals. Only the version change triggers a
+  // sync — that way per-phase clicks between signals aren't fighting the
+  // parent state.
+  useEffect(() => {
+    if (collapseSignal) setCollapsed(collapseSignal.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseSignal?.version])
+  // Join segments with a blank line so each reasoning chunk is separated
+  // visually in the rendered markdown (paragraph break).
+  const text = phase.textSegments.length > 0
+    ? phase.textSegments.join('\n\n')
+    : phase.textEvents.map((e) => e.text ?? '').join('')
   const meta = AGENT_META[phase.agentType] ?? AGENT_META.system
 
   const statusDecoration =
@@ -488,11 +579,19 @@ function PhaseSection({
 function QACoderThread({
   phases,
   showThoughts,
+  collapseSignal,
 }: {
   phases: AgentPhase[]
   showThoughts: boolean
+  collapseSignal?: { value: boolean; version: number }
 }) {
   const [expanded, setExpanded] = useState(true)
+  // The parent's collapse-all signal collapses the wrapper itself in addition
+  // to propagating to nested PhaseSections.
+  useEffect(() => {
+    if (collapseSignal) setExpanded(!collapseSignal.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseSignal?.version])
   const attemptLabel = phases[0]?.label.match(/Attempt (\d+)/)?.[1]
 
   return (
@@ -518,7 +617,12 @@ function QACoderThread({
       {expanded && (
         <div className="p-3 space-y-2 bg-white">
           {phases.map((phase) => (
-            <PhaseSection key={phase.id} phase={phase} showThoughts={showThoughts} />
+            <PhaseSection
+              key={phase.id}
+              phase={phase}
+              showThoughts={showThoughts}
+              collapseSignal={collapseSignal}
+            />
           ))}
         </div>
       )}
@@ -576,6 +680,18 @@ export function AgentTimeline({
 
   const clusters = useMemo(() => clusterPhases(phases), [phases])
 
+  // Master collapse state. We use a {value, version} pair so each click
+  // produces a NEW signal even when the value hasn't changed (e.g. user
+  // expanded one phase manually then clicks "Expand all" — the signal
+  // version bumps and PhaseSections re-sync). version=0 means "no signal
+  // sent yet", so freshly-mounted phases keep their default expanded state.
+  const [collapseSignal, setCollapseSignal] = useState<{ value: boolean; version: number }>({
+    value: false,
+    version: 0,
+  })
+  const sendCollapseSignal = (value: boolean) =>
+    setCollapseSignal((prev) => ({ value, version: prev.version + 1 }))
+
   if (phases.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center">
@@ -584,13 +700,47 @@ export function AgentTimeline({
     )
   }
 
+  // Only show the master toggle when there's actually more than one phase to
+  // collapse — for a single-phase timeline the per-card toggle is enough.
+  const showMasterToggle = phases.length > 1
+
   return (
     <div className="space-y-2">
+      {showMasterToggle && (
+        <div className="flex items-center justify-end gap-1 -mb-1">
+          <button
+            type="button"
+            onClick={() => sendCollapseSignal(true)}
+            className="text-[10px] px-2 py-0.5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors"
+            title="Collapse every phase below"
+          >
+            ▸ Collapse all
+          </button>
+          <button
+            type="button"
+            onClick={() => sendCollapseSignal(false)}
+            className="text-[10px] px-2 py-0.5 rounded-full border border-gray-200 bg-white text-gray-500 hover:text-gray-700 hover:border-gray-300 transition-colors"
+            title="Expand every phase below"
+          >
+            ▾ Expand all
+          </button>
+        </div>
+      )}
       {clusters.map((cluster, i) =>
         cluster.kind === 'single' ? (
-          <PhaseSection key={cluster.phase.id} phase={cluster.phase} showThoughts={showThoughts} />
+          <PhaseSection
+            key={cluster.phase.id}
+            phase={cluster.phase}
+            showThoughts={showThoughts}
+            collapseSignal={collapseSignal}
+          />
         ) : (
-          <QACoderThread key={`loop-${i}`} phases={cluster.phases} showThoughts={showThoughts} />
+          <QACoderThread
+            key={`loop-${i}`}
+            phases={cluster.phases}
+            showThoughts={showThoughts}
+            collapseSignal={collapseSignal}
+          />
         ),
       )}
     </div>

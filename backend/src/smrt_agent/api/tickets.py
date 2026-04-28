@@ -16,6 +16,12 @@ from smrt_agent.agents import budget_gateway
 from smrt_agent.db.models import Project, QASession
 from smrt_agent.db.session import get_engine, get_session_factory
 from smrt_agent.event_log import EventLogger
+from smrt_agent.fix_summary import (
+    build_fix_summary_from_events,
+    load_events_from_jsonl,
+    load_fix_summary_for_ticket,
+    save_fix_summary,
+)
 from smrt_agent.llm import LLMClient
 from smrt_agent.settings import Settings
 from smrt_agent.agents.orchestrator import run_ticket_fix_session
@@ -352,6 +358,30 @@ async def list_ticket_sessions(
     ]
 
 
+@router.get("/{project_id}/tickets/{ticket_id}/fix-summary")
+async def get_fix_summary(
+    project_id: int,
+    ticket_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Return the persisted fix summary for the most recent fix session of this
+    ticket. Returns 404 with a structured body when no summary has been saved
+    yet (i.e. the ticket has never been through a fix loop). The UI uses this
+    response shape — `{"summary": null}` — to fall back to event-stream
+    reconstruction without throwing on the network call.
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    summary = load_fix_summary_for_ticket(Path(project.canonical_path), ticket_id)
+    if summary is None:
+        # 200 with summary=null is friendlier than 404 here: the absence of a
+        # summary is normal (e.g. fresh ticket that hasn't entered the loop)
+        # and we don't want the frontend to surface it as an error.
+        return {"summary": None}
+    return {"summary": summary}
+
+
 @router.post("/{project_id}/tickets/{ticket_id}/approve")
 async def approve_ticket(
     project_id: int,
@@ -454,6 +484,24 @@ async def _ticket_fix_task(
                     await db.commit()
         except Exception:
             pass
+        # Persist a fix summary for EVERY end-of-loop, regardless of outcome.
+        # This is the durable record the UI shows in the Fix Summary tab —
+        # by writing it here we guarantee it exists even if the JSONL log is
+        # later rotated, and the UI doesn't have to re-derive it on each open.
+        try:
+            events = await asyncio.to_thread(
+                load_events_from_jsonl, project_path, session_id
+            )
+            summary = build_fix_summary_from_events(
+                events,
+                ticket_id=ticket_id,
+                session_id=session_id,
+                final_status=final_status,
+            )
+            await asyncio.to_thread(save_fix_summary, project_path, summary)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("fix-summary persist failed: %s", exc)
         try:
             await queue.put({"type": "done", "status": final_status})
         except Exception:

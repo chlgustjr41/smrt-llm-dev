@@ -11,6 +11,9 @@ service-account*.json
 secrets.yaml
 secrets.yml
 
+# ─── Backend agent defaults (committed as .config.example) ──
+backend/.config
+
 # ─── Agent runtime artifacts ────────────────────────────────
 .smrt/runs/
 .smrt/sandbox/

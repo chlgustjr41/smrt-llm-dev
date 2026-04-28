@@ -3,7 +3,7 @@ import { apiFetch } from './client'
 export type TicketStatus = 'pending_confirmation' | 'in_progress' | 'qa_review' | 'needs_review' | 'closed'
 
 export interface TicketFailureReport {
-  recommendation: 'needs_more_attempts' | 'possibly_not_a_bug'
+  recommendation: 'needs_more_attempts' | 'possibly_not_a_bug' | 'test_faulty'
   analysis: string
 }
 
@@ -30,6 +30,28 @@ export interface TicketSession {
   fix_attempt: number
   started_at: string | null
   completed_at: string | null
+}
+
+export interface FixSummaryChange {
+  path: string
+  tool: string
+  reasoning: string
+  kind: string  // 'edit' | 'patch' | 'write' | 'unknown'
+  content: string
+  ts?: string | null
+}
+
+export interface FixSummary {
+  ticket_id: string
+  session_id: string
+  final_status: string
+  pr_ready: boolean
+  recommendation: string | null
+  analysis: string | null
+  qa_early_exit: string | null
+  recheck_output: string | null
+  changes: FixSummaryChange[]
+  completed_at: string
 }
 
 export async function listTickets(projectId: number, signal?: AbortSignal): Promise<Ticket[]> {
@@ -62,4 +84,19 @@ export async function getTicketSessions(
 
 export async function resetTicket(projectId: number, ticketId: string): Promise<{ status: string }> {
   return apiFetch<{ status: string }>(`/projects/${projectId}/tickets/${ticketId}/reset`, { method: 'POST' })
+}
+
+/** Fetch the persisted fix summary for the most recent fix session of a
+ *  ticket. Returns null when no summary has been recorded yet — the API uses
+ *  `{summary: null}` rather than 404 so callers can branch without try/catch. */
+export async function getFixSummary(
+  projectId: number,
+  ticketId: string,
+  signal?: AbortSignal,
+): Promise<FixSummary | null> {
+  const resp = await apiFetch<{ summary: FixSummary | null }>(
+    `/projects/${projectId}/tickets/${ticketId}/fix-summary`,
+    { signal },
+  )
+  return resp.summary
 }

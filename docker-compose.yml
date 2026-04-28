@@ -17,7 +17,11 @@ services:
       - SMRT_BIND_HOST=0.0.0.0
       - SMRT_DB_PATH=/app/.smrt/state.db
       - SMRT_PROJECT_ROOT_ALLOWLIST=/workspace
+    # env_file order: later files override earlier ones, so .env wins over
+    # backend/.config. backend/.config supplies the agent defaults; .env
+    # supplies secrets and any per-deployment overrides.
     env_file:
+      - backend/.config
       - .env
     command: uvicorn smrt_agent.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped

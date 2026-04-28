@@ -79,11 +79,19 @@ async def run_coder_agent(
     model_qa: str | None = None,
     max_questions: int = 0,
     job_id: str | None = None,
+    attempt_index: int = 0,
+    max_fix_attempts: int = 1,
 ) -> None:
     """Run the Coder agent to fix bugs described in ticket_content.
 
     When llm_client_qa/model_qa/max_questions are provided, the Coder can call
     ask_qa up to max_questions times per run to consult the QA agent.
+
+    attempt_index / max_fix_attempts are surfaced in the task message so the
+    Coder explicitly knows where it is in the fix loop and can budget its
+    investigation accordingly. The ticket_content is expected to already
+    carry prior attempts' QA feedback (the orchestrator appends it between
+    iterations) — the Coder is reminded to read those notes.
     """
     system_prompt = _load_system_prompt()
 
@@ -91,14 +99,40 @@ async def run_coder_agent(
     tool_defs = get_tool_definitions(with_ask_qa=has_qa)
     questions_remaining = max_questions
 
+    attempts_left = max(0, max_fix_attempts - attempt_index - 1)
+    is_last = attempts_left == 0
+    attempt_context = (
+        f"\n\nFix attempt {attempt_index + 1} of {max_fix_attempts}"
+        f" — {attempts_left} attempt(s) remain after this one."
+    )
+    if attempt_index > 0:
+        attempt_context += (
+            "\nThe ticket below contains QA feedback from previous attempts."
+            " Read it carefully and DO NOT repeat the same approach that failed."
+            " Choose a different angle: re-read source files you skipped,"
+            " consider edge cases the prior fix missed, or question whether your"
+            " mental model of the bug is correct."
+        )
+    if is_last:
+        attempt_context += (
+            "\nThis is your LAST attempt. If it fails the ticket is escalated"
+            " to human review, so prioritize correctness over speed."
+        )
+
     task = (
-        f"Budget: ${budget_usd:.2f} USD — work efficiently.\n\n"
+        f"Budget: ${budget_usd:.2f} USD — work efficiently."
+        f"{attempt_context}\n\n"
         f"Bug ticket to fix:\n\n{ticket_content}\n\n"
         f"Failing pytest output:\n\n```\n{pytest_output}\n```\n\n"
         f"Fix the source code so these tests pass."
     )
     if has_qa:
-        task += f"\n\nYou have {max_questions} question(s) available to ask the QA agent via ask_qa if you need clarification."
+        task += (
+            f"\n\nYou have {max_questions} question(s) available to ask the QA"
+            f" agent via ask_qa this attempt (counter resets each attempt)."
+            f" Spend them on genuine ambiguities — not on questions you can"
+            f" answer by reading the source."
+        )
 
     messages: list[dict] = [{"role": "user", "content": task}]
     total_input = 0

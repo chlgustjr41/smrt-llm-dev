@@ -87,6 +87,38 @@ describe('QASessionView', () => {
     await waitFor(() => expect(screen.getByText(/session complete/i)).toBeInTheDocument())
   })
 
+  it('counts tickets from write_bug_ticket tool results, not just hitl_request', async () => {
+    // Production scenario: QA agent writes 3 tickets via write_bug_ticket but
+    // only one hitl_request fires at the end of the session. The completion
+    // banner should reflect the *true* count of tickets filed.
+    _sseScenario = [
+      { type: 'tool_use', tool: 'write_bug_ticket', agent: 'qa', input: { title: 't1' } },
+      { type: 'tool_result', tool: 'write_bug_ticket', agent: 'qa', result: '2026-04-28-001' },
+      { type: 'tool_use', tool: 'write_bug_ticket', agent: 'qa', input: { title: 't2' } },
+      { type: 'tool_result', tool: 'write_bug_ticket', agent: 'qa', result: '2026-04-28-002' },
+      { type: 'tool_use', tool: 'write_bug_ticket', agent: 'qa', input: { title: 't3' } },
+      { type: 'tool_result', tool: 'write_bug_ticket', agent: 'qa', result: '2026-04-28-003' },
+      { type: 'hitl_request', session_id: 'sess-1', ticket_id: '2026-04-28-003', fix_attempt: 0 },
+      { type: 'done', status: 'done' },
+    ]
+    render(<QASessionView projectId={1} sessionId="sess-1" />)
+    await waitFor(() => expect(screen.getByText(/3 bug tickets filed/i)).toBeInTheDocument())
+  })
+
+  it('does not show an empty "Complete" expandable tab after the QA run ends', async () => {
+    _sseScenario = [
+      { type: 'session_status', status: 'qa_running', fix_attempt: 0, ts: new Date().toISOString() },
+      { type: 'qa_text_delta', text: 'Found issues', agent: 'qa' },
+      { type: 'session_status', status: 'done', ts: new Date().toISOString() },
+      { type: 'done', status: 'done' },
+    ]
+    render(<QASessionView projectId={1} sessionId="sess-1" />)
+    await waitFor(() => expect(screen.getByText(/session complete/i)).toBeInTheDocument())
+    // The success banner is the only "complete" indicator — the timeline
+    // should not also have an empty Complete card.
+    expect(screen.queryByText(/^Complete$/)).not.toBeInTheDocument()
+  })
+
   it('shows tool input after expanding a tool call in the timeline', async () => {
     const user = userEvent.setup()
     _sseScenario = [
