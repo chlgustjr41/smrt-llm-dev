@@ -59,7 +59,7 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
           const earlyExit = logged.find((e) => e.type === 'qa_early_exit')
           if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA determined fix is complete.')
           const lastDone = [...logged].reverse().find((e) =>
-            ['done', 'error', 'budget_exceeded', 'timeout'].includes(e.type),
+            ['done', 'error', 'budget_exceeded', 'timeout', 'cancelled'].includes(e.type),
           )
           if (lastDone) {
             markDone(lastDone.status ?? lastDone.type)
@@ -88,7 +88,7 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
       } else if (event.type === 'budget_continue') {
         setBudgetPause(null)
         setBudgetDeciding(false)
-      } else if (['done', 'error', 'budget_exceeded', 'timeout'].includes(event.type)) {
+      } else if (['done', 'error', 'budget_exceeded', 'timeout', 'cancelled'].includes(event.type)) {
         setBudgetPause(null)
         markDone(event.status ?? event.type)
         es.close()
@@ -151,6 +151,19 @@ export function QASessionView({ projectId, sessionId, onComplete }: Props) {
             <p className="text-sm font-semibold text-gray-600">Could not connect to session stream</p>
             <p className="text-xs text-gray-500 mt-0.5">
               The session may not have started, or already finished before connecting. Try starting a new session.
+            </p>
+          </div>
+        </div>
+      )
+    }
+    if (finalStatus === 'cancelled') {
+      return (
+        <div className="flex items-start gap-3 rounded-lg border border-gray-300 bg-gray-50 px-4 py-3">
+          <span className="text-gray-500 text-lg leading-none mt-0.5">✕</span>
+          <div>
+            <p className="text-sm font-semibold text-gray-700">Session cancelled</p>
+            <p className="text-xs text-gray-600 mt-0.5">
+              You stopped this session before it finished. Tickets filed before the cancel are still in Pending Confirmation.
             </p>
           </div>
         </div>

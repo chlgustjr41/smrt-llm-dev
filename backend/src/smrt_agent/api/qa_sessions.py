@@ -26,6 +26,11 @@ router = APIRouter(prefix="/projects", tags=["qa-sessions"])
 _hitl_events: dict[str, asyncio.Event] = {}
 _hitl_decisions: dict[str, str] = {}
 
+# Background-task registry: session_id -> asyncio.Task. Same purpose as the
+# corresponding registry in api/runs.py — lets the cancel endpoint find and
+# cancel the running coroutine.
+_session_tasks: dict[str, "asyncio.Task[None]"] = {}
+
 
 @router.post("/{project_id}/qa-sessions", status_code=202)
 async def create_qa_session(
@@ -56,7 +61,7 @@ async def create_qa_session(
     except Exception:
         stored = {}
 
-    asyncio.create_task(_session_task(
+    task = asyncio.create_task(_session_task(
         project_id=project_id,
         session_id=session_id,
         canonical_path=project.canonical_path,
@@ -69,6 +74,8 @@ async def create_qa_session(
         max_questions_per_attempt=stored.get("max_questions_per_attempt", 0),
         job_id=session_id,
     ))
+    _session_tasks[session_id] = task
+    task.add_done_callback(lambda _: _session_tasks.pop(session_id, None))
 
     return {"session_id": session_id, "status": "pending"}
 
@@ -104,6 +111,13 @@ async def _session_task(
             queue=queue,
             job_id=job_id,
         )
+    except asyncio.CancelledError:
+        # User clicked Cancel. The cancel endpoint already emitted the
+        # `cancelled` SSE event and updated the DB; we set final_status so
+        # the finally clause records "cancelled" rather than "error", then
+        # re-raise so asyncio marks the task as cancelled normally.
+        final_status = "cancelled"
+        raise
     except Exception as exc:
         await queue.put({"type": "error", "message": str(exc)})
         final_status = "error"
@@ -188,7 +202,7 @@ async def stream_qa_session(project_id: int, session_id: str) -> StreamingRespon
             while True:
                 event = await asyncio.wait_for(queue.get(), timeout=300.0)
                 yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") in ("done", "error", "budget_exceeded"):
+                if event.get("type") in ("done", "error", "budget_exceeded", "cancelled"):
                     session_queues.pop(session_id, None)
                     break
         except asyncio.TimeoutError:
@@ -230,3 +244,46 @@ async def skip_qa_session(project_id: int, session_id: str) -> dict:
     _hitl_decisions[session_id] = "skip"
     event.set()
     return {"decision": "skip"}
+
+
+@router.post("/{project_id}/qa-sessions/{session_id}/cancel", status_code=200)
+async def cancel_qa_session(
+    project_id: int,
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Cancel a running QA session. Mirrors the cancel endpoint in
+    api/runs.py — best-effort task cancellation, SSE event emission, and
+    DB status update. Idempotent for already-completed sessions."""
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    task = _session_tasks.get(session_id)
+    queue = session_queues.get(session_id)
+
+    cancelled = False
+    if task and not task.done():
+        task.cancel()
+        cancelled = True
+        if queue is not None:
+            try:
+                await queue.put({
+                    "type": "cancelled",
+                    "reason": "User requested cancellation",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
+    try:
+        result = await db.execute(select(QASession).where(QASession.session_id == session_id))
+        sess = result.scalar_one_or_none()
+        if sess and sess.status not in ("done", "error", "cancelled", "loop_exhausted"):
+            sess.status = "cancelled"
+            sess.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception:
+        pass
+
+    return {"session_id": session_id, "cancelled": cancelled, "status": "cancelled"}

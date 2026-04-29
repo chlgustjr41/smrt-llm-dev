@@ -28,6 +28,11 @@ router = APIRouter(prefix="/projects", tags=["runs"])
 # In-process queue registry: run_id -> asyncio.Queue
 _queues: dict[str, asyncio.Queue] = {}
 
+# Background task registry: run_id -> asyncio.Task. Populated when a run is
+# created so the cancel endpoint can call .cancel() on the running coroutine.
+# Tasks are popped on completion via add_done_callback.
+_tasks: dict[str, "asyncio.Task[None]"] = {}
+
 
 @router.post("/{project_id}/runs", status_code=202, response_model=RunCreatedResponse)
 async def create_run(
@@ -71,7 +76,7 @@ async def create_run(
 
     settings = Settings()
 
-    asyncio.create_task(
+    task = asyncio.create_task(
         _run_task(
             project_id=project_id,
             canonical_path=project.canonical_path,
@@ -84,6 +89,10 @@ async def create_run(
             generate_docs=generate_docs_flag,
         )
     )
+    # Register so the cancel endpoint can find the task; auto-cleanup when
+    # the task completes (whether normally or via cancellation).
+    _tasks[run_id] = task
+    task.add_done_callback(lambda _: _tasks.pop(run_id, None))
 
     return RunCreatedResponse(run_id=run_id, status="pending")
 
@@ -172,6 +181,14 @@ async def _run_task(
                 "reason": "generate_docs flag was disabled for this run",
                 "ts": datetime.now(timezone.utc).isoformat(),
             })
+    except asyncio.CancelledError:
+        # User clicked Cancel. The cancel endpoint already emitted a
+        # `cancelled` SSE event and updated the DB row; we just stop
+        # gracefully and re-raise so asyncio marks the task as cancelled.
+        # The finally clause still runs and updates DB to "cancelled" if it
+        # somehow wasn't set yet.
+        final_status = "cancelled"
+        raise
     except Exception as exc:
         await queue.put({"type": "error", "message": str(exc)})
         final_status = "error"
@@ -190,6 +207,58 @@ async def _run_task(
                         await db.commit()
             except Exception:
                 pass
+
+
+@router.post("/{project_id}/runs/{run_id}/cancel", status_code=200)
+async def cancel_run(
+    project_id: int,
+    run_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Cancel a running Init Audit. Best-effort:
+      - calls .cancel() on the background task (interrupts the LLM stream)
+      - emits a `cancelled` event to the SSE stream so the UI updates live
+      - marks the AgentRun status as 'cancelled' in the DB
+
+    Idempotent: returns the current status even if the run already finished
+    (no error — the user may click cancel slightly after a natural completion).
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    task = _tasks.get(run_id)
+    queue = _queues.get(run_id)
+
+    cancelled = False
+    if task and not task.done():
+        task.cancel()
+        cancelled = True
+        if queue is not None:
+            try:
+                await queue.put({
+                    "type": "cancelled",
+                    "reason": "User requested cancellation",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
+    # DB update — best-effort. The background task's finally block also writes
+    # a final status, but we set it here too so the UI reflects the cancel
+    # immediately (otherwise listRuns may briefly show "running" until the
+    # task settles).
+    try:
+        result = await db.execute(select(AgentRun).where(AgentRun.run_id == run_id))
+        run = result.scalar_one_or_none()
+        if run and run.status in ("pending", "running"):
+            run.status = "cancelled"
+            run.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception:
+        pass
+
+    return {"run_id": run_id, "cancelled": cancelled, "status": "cancelled"}
 
 
 @router.post("/{project_id}/runs/{run_id}/budget-decision", status_code=200)
@@ -239,7 +308,7 @@ async def stream_run(project_id: int, run_id: str) -> StreamingResponse:
             while True:
                 event = await asyncio.wait_for(queue.get(), timeout=300.0)
                 yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") in ("done", "error", "budget_exceeded"):
+                if event.get("type") in ("done", "error", "budget_exceeded", "cancelled"):
                     _queues.pop(run_id, None)
                     break
         except asyncio.TimeoutError:

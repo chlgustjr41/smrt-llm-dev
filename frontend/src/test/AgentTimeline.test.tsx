@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AgentTimeline, type AgentEvent } from '../components/AgentTimeline'
@@ -157,6 +157,30 @@ describe('AgentTimeline', () => {
     ]
     render(<AgentTimeline events={events} defaultLabel="Reviewer" showThoughts={true} />)
     expect(screen.queryByText(/Collapse all/)).not.toBeInTheDocument()
+  })
+
+  it('does NOT call scrollIntoView on every text_delta within an existing phase', () => {
+    const scrollSpy = vi.fn()
+    Element.prototype.scrollIntoView = scrollSpy
+
+    const ts = new Date().toISOString()
+    const initialEvents: AgentEvent[] = [
+      { type: 'session_status', status: 'qa_running', fix_attempt: 0, ts },
+      { type: 'qa_text_delta', text: 'first chunk', agent: 'qa' },
+    ]
+    const { rerender } = render(<AgentTimeline events={initialEvents} showThoughts={true} />)
+    const callsAfterMount = scrollSpy.mock.calls.length
+
+    // Simulate token streaming inside the same phase — phase count doesn't
+    // change, so scroll must NOT fire (otherwise the page would yank the
+    // user around dozens of times per second).
+    const moreText: AgentEvent[] = [
+      ...initialEvents,
+      { type: 'qa_text_delta', text: 'second chunk', agent: 'qa' },
+      { type: 'qa_text_delta', text: 'third chunk', agent: 'qa' },
+    ]
+    rerender(<AgentTimeline events={moreText} showThoughts={true} />)
+    expect(scrollSpy.mock.calls.length).toBe(callsAfterMount)
   })
 
   it('collapses all phase cards when the master Collapse all is clicked', async () => {

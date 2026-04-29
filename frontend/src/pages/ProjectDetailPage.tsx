@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getProject, listRuns, type Project, type AgentRunSummary } from '../api/projects'
 import { getConfig, patchConfig, type ProjectConfig } from '../api/config'
-import { createRun } from '../api/runs'
+import { createRun, cancelRun } from '../api/runs'
 import { getLlmProvider, type LlmProvider } from '../api/llm'
 import { LiveAgentView } from '../components/LiveAgentView'
-import { createQASession, getLatestQASession } from '../api/qa_sessions'
+import { createQASession, getLatestQASession, cancelQASession } from '../api/qa_sessions'
 import { QASessionView } from '../components/QASessionView'
 import { TicketsPanel } from '../components/TicketsPanel'
 import { PastRunViewer } from '../components/PastRunViewer'
@@ -42,6 +42,7 @@ function StatusBadge({ status }: { status: string }) {
     error: 'bg-red-100 text-red-600',
     budget_exceeded: 'bg-red-100 text-red-600',
     skipped: 'bg-gray-100 text-gray-500',
+    cancelled: 'bg-gray-200 text-gray-600',
     hitl_waiting: 'bg-yellow-100 text-yellow-700',
     loop_exhausted: 'bg-orange-100 text-orange-700',
   }
@@ -1050,6 +1051,34 @@ export function ProjectDetailPage() {
     }
   }
 
+  async function handleCancelAudit() {
+    if (!runId) return
+    if (!confirm('Cancel the running Init Audit? Any in-flight work will stop.')) return
+    try {
+      await cancelRun(projectId, runId)
+      // Optimistic update — the SSE stream will also surface a `cancelled`
+      // event and the LiveAgentView's onComplete handler will refresh the
+      // run row. We update the local pastRuns immediately so the badge
+      // flips without waiting for the next listRuns refetch.
+      setPastRuns((prev) =>
+        prev.map((r) => (r.run_id === runId ? { ...r, status: 'cancelled' } : r)),
+      )
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to cancel run')
+    }
+  }
+
+  async function handleCancelQA() {
+    if (!qaSessionId) return
+    if (!confirm('Cancel the running QA / Test Session? Any in-flight work will stop.')) return
+    try {
+      await cancelQASession(projectId, qaSessionId)
+      setQaStatus('cancelled')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to cancel session')
+    }
+  }
+
   if (loading) return (
     <div className="max-w-4xl mx-auto p-8 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-lg">⟳</span>
@@ -1158,7 +1187,19 @@ export function ProjectDetailPage() {
                       {activeRunStatus && <StatusBadge status={activeRunStatus} />}
                     </div>
                   )}
-                  {(!runId || !activeRunStatus || ['done', 'error', 'skipped'].includes(activeRunStatus)) && (
+                  {/* Cancel — visible only while the run is in flight. The
+                      backend supports best-effort cancellation; the SSE
+                      stream surfaces a `cancelled` event when it lands. */}
+                  {runId && activeRunStatus && ['pending', 'running'].includes(activeRunStatus) && (
+                    <button
+                      onClick={handleCancelAudit}
+                      className="inline-flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                      title="Stop the running audit"
+                    >
+                      <span>✕</span> Cancel
+                    </button>
+                  )}
+                  {(!runId || !activeRunStatus || ['done', 'error', 'skipped', 'cancelled'].includes(activeRunStatus)) && (
                     <>
                       {/* Doc-generation toggle — sits inline with the Run
                           button so the user sees their choice before they
@@ -1214,6 +1255,18 @@ export function ProjectDetailPage() {
                 <div className="flex items-center gap-3">
                   {qaSessionId && !qaStatus && <StatusBadge status="qa_running" />}
                   {qaStatus && <StatusBadge status={qaStatus} />}
+                  {/* Cancel — visible only while a QA session is in flight.
+                      qaStatus is null while the loop runs, set to a terminal
+                      string after it ends. */}
+                  {qaSessionId && !qaStatus && (
+                    <button
+                      onClick={handleCancelQA}
+                      className="inline-flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                      title="Stop the running QA / Test Session"
+                    >
+                      <span>✕</span> Cancel
+                    </button>
+                  )}
                   {(!qaSessionId || qaStatus) && (
                     <button
                       onClick={handleRunQA}

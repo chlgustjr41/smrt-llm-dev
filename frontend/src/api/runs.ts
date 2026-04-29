@@ -43,3 +43,15 @@ export function postRunBudgetDecision(
     body: JSON.stringify({ decision }),
   })
 }
+
+/** Cancel a running Init Audit. Idempotent — returns the cancelled state
+ *  even if the run already finished naturally. The backend emits a
+ *  `cancelled` SSE event and updates the AgentRun row's status. */
+export function cancelRun(
+  projectId: number,
+  runId: string,
+): Promise<{ run_id: string; cancelled: boolean; status: string }> {
+  return apiFetch(`/projects/${projectId}/runs/${runId}/cancel`, {
+    method: 'POST',
+  })
+}

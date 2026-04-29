@@ -357,7 +357,7 @@ function ToolCallRow({ pair, agentType }: { pair: ToolCallPair; agentType: strin
           {pair.reasoning && (
             <div>
               <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5 font-sans">Why</p>
-              <div className="prose prose-xs max-w-none text-gray-600 text-xs leading-relaxed bg-white border border-gray-100 rounded p-2 max-h-48 overflow-y-auto font-sans [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_code]:bg-gray-100 [&_code]:px-0.5 [&_code]:rounded [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-gray-50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
+              <div className="prose prose-xs max-w-none text-gray-600 text-xs leading-relaxed bg-white border border-gray-100 rounded p-2 max-h-48 overflow-y-auto font-sans [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_code]:bg-gray-100 [&_code]:px-0.5 [&_code]:rounded [&_pre]:bg-gray-900 [&_pre]:text-gray-100 [&_pre]:border [&_pre]:border-gray-700 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:text-gray-100 [&_pre_code]:p-0 [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-gray-50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
                 <GfmMarkdown>{pair.reasoning}</GfmMarkdown>
               </div>
             </div>
@@ -432,7 +432,7 @@ function ThoughtBubble({ text, agentType }: { text: string; agentType: string })
             ref={scrollRef}
             className={`px-3 pb-1 overflow-y-auto transition-all ${fullyExpanded ? '' : CLIP_HEIGHT}`}
           >
-            <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0 [&_code]:bg-white/60 [&_code]:px-0.5 [&_code]:rounded text-xs leading-relaxed pt-2 [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-white/40 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
+            <div className="prose prose-xs max-w-none text-gray-700 [&_p]:my-1 [&_ul]:my-1 [&_li]:my-0 [&_code]:bg-white/60 [&_code]:px-0.5 [&_code]:rounded text-xs leading-relaxed pt-2 [&_pre]:bg-gray-900 [&_pre]:text-gray-100 [&_pre]:border [&_pre]:border-gray-700 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:text-gray-100 [&_pre_code]:p-0 [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-gray-300 [&_th]:bg-white/40 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-gray-200 [&_td]:px-2 [&_td]:py-1">
               <GfmMarkdown>{text}</GfmMarkdown>
             </div>
           </div>
@@ -705,6 +705,32 @@ export function AgentTimeline({
   const sendCollapseSignal = (value: boolean) =>
     setCollapseSignal((prev) => ({ value, version: prev.version + 1 }))
 
+  // Track the latest cluster so we can scroll to it when a NEW phase appears.
+  // We deliberately don't scroll on every text_delta inside an existing
+  // phase — that would yank the user around dozens of times per second.
+  // The active phase already auto-scrolls its own thought stream via
+  // ThoughtBubble's tail-follow effect.
+  const lastClusterRef = useRef<HTMLDivElement>(null)
+  const prevClusterCountRef = useRef(clusters.length)
+  useEffect(() => {
+    if (clusters.length > prevClusterCountRef.current) {
+      // New phase just appeared — scroll its element into view. `block: 'end'`
+      // pins the bottom of the new phase to the visible area; `nearest`
+      // inline avoids unwanted horizontal scrolling on narrow layouts.
+      // The typeof guard accommodates jsdom (test runner), which doesn't
+      // implement scrollIntoView. Real browsers always have it.
+      const el = lastClusterRef.current
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({
+          behavior: 'smooth',
+          block: 'end',
+          inline: 'nearest',
+        })
+      }
+    }
+    prevClusterCountRef.current = clusters.length
+  }, [clusters.length])
+
   if (phases.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center">
@@ -739,23 +765,34 @@ export function AgentTimeline({
           </button>
         </div>
       )}
-      {clusters.map((cluster, i) =>
-        cluster.kind === 'single' ? (
-          <PhaseSection
-            key={cluster.phase.id}
-            phase={cluster.phase}
-            showThoughts={showThoughts}
-            collapseSignal={collapseSignal}
-          />
+      {clusters.map((cluster, i) => {
+        const isLast = i === clusters.length - 1
+        // Wrap the last cluster in a ref'd div so the auto-scroll effect
+        // can call scrollIntoView on it whenever a new phase appears.
+        const inner =
+          cluster.kind === 'single' ? (
+            <PhaseSection
+              key={cluster.phase.id}
+              phase={cluster.phase}
+              showThoughts={showThoughts}
+              collapseSignal={collapseSignal}
+            />
+          ) : (
+            <QACoderThread
+              key={`loop-${i}`}
+              phases={cluster.phases}
+              showThoughts={showThoughts}
+              collapseSignal={collapseSignal}
+            />
+          )
+        return isLast ? (
+          <div ref={lastClusterRef} key={cluster.kind === 'single' ? cluster.phase.id : `loop-${i}-wrap`}>
+            {inner}
+          </div>
         ) : (
-          <QACoderThread
-            key={`loop-${i}`}
-            phases={cluster.phases}
-            showThoughts={showThoughts}
-            collapseSignal={collapseSignal}
-          />
-        ),
-      )}
+          inner
+        )
+      })}
     </div>
   )
 }

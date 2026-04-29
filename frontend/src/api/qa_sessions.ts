@@ -49,6 +49,16 @@ export function postSessionBudgetDecision(
   })
 }
 
+/** Cancel a running QA session. Mirrors cancelRun. Idempotent. */
+export function cancelQASession(
+  projectId: number,
+  sessionId: string,
+): Promise<{ session_id: string; cancelled: boolean; status: string }> {
+  return apiFetch(`/projects/${projectId}/qa-sessions/${sessionId}/cancel`, {
+    method: 'POST',
+  })
+}
+
 export async function getQASessionEvents(
   projectId: number,
   sessionId: string,

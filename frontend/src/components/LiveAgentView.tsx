@@ -75,6 +75,11 @@ export function LiveAgentView({
         setDone(true)
         es.close()
         onCompleteRef.current?.('error')
+      } else if (event.type === 'cancelled') {
+        setSummary('Audit cancelled by user')
+        setDone(true)
+        es.close()
+        onCompleteRef.current?.('cancelled')
       }
     }
 
