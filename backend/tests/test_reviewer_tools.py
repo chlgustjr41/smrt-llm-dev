@@ -1,7 +1,14 @@
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from smrt_agent.agents.reviewer.tools import list_files, read_file, fetch_url, write_file
+from smrt_agent.agents.reviewer.tools import (
+    fetch_url,
+    list_files,
+    read_file,
+    write_docs_file,
+    write_file,
+    write_readme,
+)
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -91,3 +98,60 @@ def test_write_file_blocks_path_traversal(tmp_path):
     project = _make_project(tmp_path)
     with pytest.raises(PermissionError):
         write_file(project, ".smrt/../../outside.txt", "bad")
+
+
+# ── write_readme ──────────────────────────────────────────────────────────
+
+def test_write_readme_creates_top_level_readme(tmp_path):
+    project = _make_project(tmp_path)
+    result = write_readme(project, "# My Project\n\nA brief overview.\n")
+    assert "Wrote" in result
+    assert (tmp_path / "README.md").read_text(encoding="utf-8").startswith("# My Project")
+
+
+def test_write_readme_overwrites_existing(tmp_path):
+    project = _make_project(tmp_path)
+    (tmp_path / "README.md").write_text("# Old", encoding="utf-8")
+    write_readme(project, "# New\n")
+    # The tool itself does NOT enforce "skip if substantial" — that's the
+    # prompt's responsibility. The tool always writes when called.
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "# New\n"
+
+
+# ── write_docs_file ───────────────────────────────────────────────────────
+
+def test_write_docs_file_creates_under_docs_dir(tmp_path):
+    project = _make_project(tmp_path)
+    result = write_docs_file(project, "docs/architecture.md", "# Architecture\n")
+    assert "Wrote" in result
+    assert (tmp_path / "docs" / "architecture.md").read_text(encoding="utf-8").startswith("# Architecture")
+
+
+def test_write_docs_file_creates_nested_subdirs(tmp_path):
+    project = _make_project(tmp_path)
+    write_docs_file(project, "docs/modules/auth.md", "# Auth Module\n")
+    assert (tmp_path / "docs" / "modules" / "auth.md").exists()
+
+
+def test_write_docs_file_blocks_writes_outside_docs(tmp_path):
+    project = _make_project(tmp_path)
+    # Top-level files outside docs/ are forbidden — write_readme is the only
+    # sanctioned escape hatch for the project root.
+    with pytest.raises(PermissionError):
+        write_docs_file(project, "src/injected.py", "import os")
+    with pytest.raises(PermissionError):
+        write_docs_file(project, "README.md", "# tricky")
+    with pytest.raises(PermissionError):
+        write_docs_file(project, ".smrt/sneaky.md", "# hidden")
+
+
+def test_write_docs_file_requires_md_extension(tmp_path):
+    project = _make_project(tmp_path)
+    with pytest.raises(ValueError):
+        write_docs_file(project, "docs/architecture.txt", "not markdown")
+
+
+def test_write_docs_file_blocks_path_traversal(tmp_path):
+    project = _make_project(tmp_path)
+    with pytest.raises(PermissionError):
+        write_docs_file(project, "docs/../outside.md", "bad")

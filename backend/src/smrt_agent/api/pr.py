@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from smrt_agent.api.deps import get_db
 from smrt_agent.db.models import Project, QASession
 from smrt_agent.agents.qa.tools import append_bugs_resolved
+from smrt_agent.agents.reviewer.tools import write_docs_file, write_file, write_readme
+from smrt_agent.fix_summary import load_fix_summary_for_ticket
 from smrt_agent.knowledge import append_lesson, append_rejection, sync_wiki_log
 
 router = APIRouter(prefix="/projects", tags=["pr"])
@@ -50,6 +52,60 @@ def _write_pending_prs(project_path: Path, entries: list[dict]) -> None:
     with pr_log.open("w", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry) + "\n")
+
+
+def _apply_proposed_doc_updates(project_path: Path, ticket_id: str) -> dict:
+    """Read the persisted Fix Summary for this ticket and apply any
+    proposed_doc_updates the Reviewer queued. Returns a structured report
+    of what was applied so the API response can surface counts to the user.
+
+    Path policy mirrors the Reviewer's tool restrictions:
+      - 'README.md'           → write_readme
+      - 'docs/<...>.md'       → write_docs_file
+      - '.smrt/Project.md'    → write_file (the only .smrt/ path we permit
+                                from a doc-update proposal — others are
+                                runtime artifacts the Reviewer shouldn't
+                                be writing as part of an accept)
+
+    Failures on individual files are recorded in the report but never
+    raise — the user already accepted the fix; we don't want one bad
+    proposal to block the whole accept flow.
+    """
+    report: dict = {"applied": [], "skipped": [], "errors": []}
+    summary = load_fix_summary_for_ticket(project_path, ticket_id)
+    if not summary:
+        return report
+
+    updates = summary.get("proposed_doc_updates") or []
+    if not isinstance(updates, list):
+        return report
+
+    for u in updates:
+        if not isinstance(u, dict):
+            continue
+        path = u.get("path")
+        content = u.get("new_content")
+        if not isinstance(path, str) or not isinstance(content, str):
+            report["skipped"].append({"path": path, "reason": "missing path or content"})
+            continue
+        try:
+            if path == "README.md":
+                write_readme(project_path, content)
+                report["applied"].append({"path": path})
+            elif path.startswith("docs/") and path.endswith(".md"):
+                write_docs_file(project_path, path, content)
+                report["applied"].append({"path": path})
+            elif path == ".smrt/Project.md":
+                write_file(project_path, path, content)
+                report["applied"].append({"path": path})
+            else:
+                report["skipped"].append({
+                    "path": path,
+                    "reason": "path not in allowed list (README.md / docs/*.md / .smrt/Project.md)",
+                })
+        except Exception as exc:
+            report["errors"].append({"path": path, "error": str(exc)})
+    return report
 
 
 @router.get("/{project_id}/pr/pending")
@@ -97,7 +153,19 @@ async def accept_pr(
     ticket_title = _get_ticket_title(project_path, ticket_id)
     append_lesson(project_path, ticket_id, "accepted", f"{ticket_title} — fix passed all tests.")
     sync_wiki_log(project_path, ticket_id, ticket_title, "accepted")
-    return {"ticket_id": ticket_id, "status": "accepted"}
+
+    # Apply any documentation updates the Reviewer queued during its final
+    # summary pass. This is the "doc updates are part of the approval"
+    # contract: clicking Accept implicitly approves both the source fix and
+    # the doc changes the Reviewer flagged. The applier is best-effort —
+    # individual proposal failures are reported but never block the accept.
+    doc_report = _apply_proposed_doc_updates(project_path, ticket_id)
+
+    return {
+        "ticket_id": ticket_id,
+        "status": "accepted",
+        "doc_updates": doc_report,
+    }
 
 
 @router.post("/{project_id}/pr/{ticket_id}/reject", status_code=200)

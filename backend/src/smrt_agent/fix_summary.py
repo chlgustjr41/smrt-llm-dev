@@ -89,6 +89,8 @@ def build_fix_summary_from_events(
     pending_text = ""
     qa_early_exit: str | None = None
     qa_final_summary: str | None = None
+    reviewer_final_summary: str | None = None
+    proposed_doc_updates: list[dict] = []
     recheck_output: str | None = None
     recommendation: str | None = None
     analysis: str | None = None
@@ -116,12 +118,22 @@ def build_fix_summary_from_events(
         elif t == "qa_early_exit":
             qa_early_exit = ev.get("reasoning")
         elif t == "qa_final_summary":
-            # The QA's compiled narrative — the headline of the persisted
-            # Fix Summary. Always take the LAST one if multiple exist (the
-            # final terminal pass wins over any earlier ones).
+            # Legacy event from earlier sessions — pre-Reviewer-summary code.
+            # Kept so Fix Summaries persisted under the old format still
+            # render their headline narrative.
             summary_text = ev.get("summary")
             if isinstance(summary_text, str) and summary_text.strip():
                 qa_final_summary = summary_text
+        elif t == "reviewer_final_summary":
+            # Current event — the Reviewer's narrative + machine-applicable
+            # proposed_doc_updates. Last non-empty wins so the final
+            # terminal pass takes precedence over any earlier draft.
+            summary_text = ev.get("summary")
+            if isinstance(summary_text, str) and summary_text.strip():
+                reviewer_final_summary = summary_text
+            updates = ev.get("proposed_doc_updates")
+            if isinstance(updates, list):
+                proposed_doc_updates = updates
         elif t == "recheck_output":
             # Take the LAST recheck — that's what the loop ended on.
             recheck_output = ev.get("output")
@@ -139,7 +151,12 @@ def build_fix_summary_from_events(
         "recommendation": recommendation,
         "analysis": analysis,
         "qa_early_exit": qa_early_exit,
+        # qa_final_summary is the legacy field (kept for back-compat reads);
+        # reviewer_final_summary is what new sessions populate. Frontend
+        # falls back to qa_final_summary when reviewer_final_summary is null.
         "qa_final_summary": qa_final_summary,
+        "reviewer_final_summary": reviewer_final_summary,
+        "proposed_doc_updates": proposed_doc_updates,
         "recheck_output": recheck_output,
         "changes": changes,
         "completed_at": datetime.now(timezone.utc).isoformat(),

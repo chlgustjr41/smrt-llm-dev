@@ -257,6 +257,71 @@ async def _get_qa_feedback(
     return feedback, satisfied, test_faulty
 
 
+def _collect_existing_docs(project_path: Path) -> dict:
+    """Snapshot the project's existing documentation so the Reviewer can
+    decide whether the fix invalidates anything documented.
+
+    Returns:
+        project_md: full text of .smrt/Project.md (or "" if missing)
+        readme: README.md content, capped to head + tail when very long
+        docs_index: list of dicts {path, head} for every docs/*.md file —
+            full content of small files, just the first lines of large ones,
+            so the Reviewer has enough signal to identify which docs touch
+            the same area as the fix without us blowing the context window.
+
+    Cap rules:
+        - README.md: up to ~3000 chars head + last 500 chars tail
+        - docs/*.md: full content if <= 1500 chars, else first 800 chars
+        - Total docs/* output capped at ~12 KB; remaining files are listed
+          by path only with a "(content omitted)" marker
+    """
+    out: dict = {"project_md": "", "readme": "", "docs_index": []}
+
+    pmd = project_path / ".smrt" / "Project.md"
+    if pmd.exists():
+        try:
+            out["project_md"] = pmd.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            out["project_md"] = ""
+
+    readme = project_path / "README.md"
+    if readme.exists():
+        try:
+            text = readme.read_text(encoding="utf-8", errors="replace")
+            if len(text) <= 3500:
+                out["readme"] = text
+            else:
+                out["readme"] = (
+                    text[:3000]
+                    + "\n\n... (middle truncated) ...\n\n"
+                    + text[-500:]
+                )
+        except OSError:
+            out["readme"] = ""
+
+    docs_root = project_path / "docs"
+    if docs_root.exists():
+        budget = 12_000  # rough char budget across all docs/* entries combined
+        used = 0
+        for md_file in sorted(docs_root.rglob("*.md")):
+            rel = str(md_file.relative_to(project_path)).replace("\\", "/")
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if used >= budget:
+                # Beyond the budget — surface the file path only so the
+                # Reviewer at least knows it exists and can name it in a
+                # proposed update without seeing its content.
+                out["docs_index"].append({"path": rel, "head": "(content omitted — beyond context budget)"})
+                continue
+            head = text if len(text) <= 1500 else (text[:800] + "\n... (truncated) ...")
+            used += len(head)
+            out["docs_index"].append({"path": rel, "head": head})
+
+    return out
+
+
 def _summarize_coder_evidence(project_path: Path, session_id: str) -> dict:
     """Read this session's JSONL log and extract evidence of what the Coder
     actually did. The QA Final Summary uses this to ground its narrative in
@@ -320,7 +385,66 @@ def _summarize_coder_evidence(project_path: Path, session_id: str) -> dict:
     }
 
 
-async def _get_qa_final_summary(
+_DOC_UPDATES_OPEN = "[DOC_UPDATES_JSON]"
+_DOC_UPDATES_CLOSE = "[/DOC_UPDATES_JSON]"
+
+
+def _parse_doc_updates(raw: str) -> list[dict]:
+    """Pull the structured proposed_doc_updates list from the Reviewer's
+    streamed text. Tolerates missing or malformed JSON (returns []) so the
+    narrative is never lost just because the JSON tail is bad.
+
+    Recognized shape:
+        [DOC_UPDATES_JSON]
+        {"updates": [
+            {"path": "docs/architecture.md",
+             "reason": "describe why",
+             "new_content": "full file content"}
+        ]}
+        [/DOC_UPDATES_JSON]
+    """
+    start = raw.find(_DOC_UPDATES_OPEN)
+    if start < 0:
+        return []
+    end = raw.find(_DOC_UPDATES_CLOSE, start)
+    if end < 0:
+        return []
+    payload = raw[start + len(_DOC_UPDATES_OPEN):end].strip()
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return []
+    raw_updates = obj.get("updates") if isinstance(obj, dict) else None
+    if not isinstance(raw_updates, list):
+        return []
+    cleaned: list[dict] = []
+    for u in raw_updates:
+        if not isinstance(u, dict):
+            continue
+        path = u.get("path")
+        new_content = u.get("new_content")
+        # Only accept proposals with the minimum viable fields. The reason
+        # field is allowed to be empty since the Reviewer may inline it
+        # in the narrative; we just want path + content to be applicable.
+        if isinstance(path, str) and isinstance(new_content, str) and path.strip():
+            cleaned.append({
+                "path": path.strip(),
+                "reason": str(u.get("reason", "")).strip(),
+                "new_content": new_content,
+            })
+    return cleaned
+
+
+def _strip_doc_updates_block(raw: str) -> str:
+    """Return the narrative portion only — strips the JSON tail used for
+    machine-applicable proposals so the user-facing summary stays clean."""
+    start = raw.find(_DOC_UPDATES_OPEN)
+    if start < 0:
+        return raw.strip()
+    return raw[:start].rstrip()
+
+
+async def _get_reviewer_final_summary(
     *,
     ticket_content: str,
     recheck_outputs: list[str],
@@ -334,35 +458,38 @@ async def _get_qa_final_summary(
     ticket_id: str = "",
     session_id: str = "",
 ) -> str:
-    """Stream a QA-written narrative wrap-up at the very end of the fix loop.
+    """Stream a Reviewer-written narrative wrap-up at the very end of the
+    fix loop, plus structured proposed_doc_updates for files in the project's
+    documentation tree.
 
-    This is the *terminal* QA pass — distinct from `_get_qa_feedback`, which is
-    the per-attempt feedback for the next iteration. The summary is the QA
-    Advisor's final report: what was discovered, what was changed, why the
-    fix is (or isn't) correct, and what the reviewer should know.
+    The Reviewer is the *third agent* — distinct from the Coder (who wrote
+    the fix) and the QA agent (who verified it). The Reviewer holds the
+    documentation context (Project.md, README, docs/*) and is best
+    positioned to (a) write an objective summary of the fix and (b) flag
+    when the fix invalidates something documented elsewhere.
 
-    Always run before the final session_status emission, regardless of outcome:
-      - success on first try → still produces a summary explaining what fixed it
-      - CASE A (QA satisfied)  → wraps up the satisfied verdict
-      - CASE C (test faulty)   → re-states the test-update plan
-      - loop_exhausted         → explains what went wrong and what to try next
+    Always run before the final session_status emission, regardless of
+    outcome (done, loop_exhausted, test_faulty, error). The proposed doc
+    updates are applied when the user accepts the ticket from Needs Review.
 
     Emits:
-      - session_status: qa_summarizing  → creates the timeline phase that
-        appears AFTER the last Coder/QA Verify so reviewers always see a
-        QA wrap-up at the bottom of the timeline.
-      - qa_text_delta (streamed)        → live token stream for the UI.
-      - qa_feedback_done                → cost accounting.
-      - qa_final_summary                → durable record with the full text.
-        This event is what `build_fix_summary_from_events` picks up to
-        populate the persisted Fix Summary's headline narrative.
+      - session_status: reviewer_summarizing  → creates the timeline phase
+        that appears AFTER the last Coder/QA Verify so reviewers always see
+        a Reviewer wrap-up at the bottom of the timeline.
+      - reviewer_text_delta (streamed)        → live token stream for the UI.
+      - qa_feedback_done                      → cost accounting (reused for
+        consistency with other terminal LLM calls).
+      - reviewer_final_summary                → durable record with the full
+        narrative AND the parsed proposed_doc_updates list. This event is
+        what `build_fix_summary_from_events` picks up to populate the
+        persisted Fix Summary's headline narrative + doc-update queue.
 
-    Returns the full summary text (best-effort: returns empty string on
+    Returns the narrative summary string (best-effort: empty string on
     LLM failure so callers never block the loop's terminal status event).
     """
     await queue.put({
         "type": "session_status",
-        "status": "qa_summarizing",
+        "status": "reviewer_summarizing",
         "ts": _ts(),
     })
 
@@ -373,6 +500,9 @@ async def _get_qa_final_summary(
     coder_evidence = await asyncio.to_thread(
         _summarize_coder_evidence, project_path, session_id
     )
+    # Snapshot the existing project docs so the Reviewer can decide which
+    # ones the fix invalidates and propose targeted updates.
+    existing_docs = await asyncio.to_thread(_collect_existing_docs, project_path)
 
     last_recheck = recheck_outputs[-1] if recheck_outputs else "(no pytest output captured)"
     attempt_count = len(recheck_outputs)
@@ -452,16 +582,55 @@ async def _get_qa_final_summary(
             "file edits, line numbers, or function changes — there were none."
         )
 
+    # Build the docs context block. We surface Project.md (full), README.md
+    # (head + tail), and an index of docs/* files (full content for small
+    # ones, heads for large ones). Without this the Reviewer would propose
+    # generic updates like "add a note about the fix" without specific
+    # content to apply.
+    project_md_block = (
+        f"### .smrt/Project.md\n```markdown\n{existing_docs['project_md']}\n```\n"
+        if existing_docs["project_md"]
+        else "### .smrt/Project.md\n_(file does not exist)_\n"
+    )
+    readme_block = (
+        f"### README.md (head + tail; full content in repo)\n```markdown\n{existing_docs['readme']}\n```\n"
+        if existing_docs["readme"]
+        else "### README.md\n_(file does not exist)_\n"
+    )
+    if existing_docs["docs_index"]:
+        docs_lines = ["### docs/* index"]
+        for d in existing_docs["docs_index"]:
+            docs_lines.append(f"#### `{d['path']}`\n```markdown\n{d['head']}\n```")
+        docs_block = "\n".join(docs_lines)
+    else:
+        docs_block = "### docs/*\n_(no documentation files yet)_"
+
+    docs_context_block = (
+        "\n\n──────── EXISTING DOCUMENTATION SNAPSHOT ────────\n"
+        "These are the project's existing docs. After your narrative, propose "
+        "any updates to these files that the fix necessitates (e.g., a "
+        "documented invariant changed, a new behavior needs noting, an "
+        "architectural decision was reversed). If nothing needs updating, "
+        "emit an empty updates list.\n\n"
+        f"{project_md_block}\n{readme_block}\n{docs_block}\n"
+        "─────────────────────────────────────────────────\n"
+    )
+
     system = (
-        "You are the senior QA engineer. The QA→Coder fix loop has just ended "
-        "for the bug ticket below. Your job is to write the COMPILED FIX "
-        "SUMMARY that will be the durable record of this fix attempt — the "
-        "first thing a reviewer reads when they open the ticket later.\n\n"
+        "You are the **Reviewer agent** — the third perspective on this "
+        "QA→Coder fix loop. The Coder wrote the fix, the QA agent verified "
+        "it, and you (Reviewer) hold the documentation context. Your job "
+        "is to write the COMPILED FIX SUMMARY (the durable record reviewers "
+        "see when they open the ticket) AND propose any documentation "
+        "updates the fix necessitates.\n\n"
         f"{outcome_clause}\n\n"
         f"{rec_clause}"
         f"{evidence_block}"
-        f"{no_op_clause}\n\n"
-        "Write the summary as concise GitHub-flavored markdown with these sections:\n"
+        f"{no_op_clause}"
+        f"{docs_context_block}\n\n"
+        "## Output format\n\n"
+        "First, write the FIX SUMMARY as concise GitHub-flavored markdown "
+        "with these sections:\n"
         "  ## What the bug was\n"
         "    One-paragraph plain-English description of the original problem.\n"
         "  ## What changed\n"
@@ -477,9 +646,32 @@ async def _get_qa_final_summary(
         "    For failed loops: explain what the Coder tried (or why they didn't try),\n"
         "    why it didn't work, and what a human reviewer should investigate next.\n"
         "  ## Final test status\n"
-        "    One or two lines summarizing the final pytest output.\n\n"
-        "Be factual and specific. The verified evidence above is the ground truth — "
-        "your summary must be consistent with it. Keep the whole summary under ~400 words."
+        "    One or two lines summarizing the final pytest output.\n"
+        "  ## Documentation impact\n"
+        "    Brief prose: which docs files (if any) should be updated and why.\n"
+        "    If none, say 'No documentation updates required.'\n\n"
+        "Then, AFTER the markdown, emit a structured proposed-updates block "
+        "the system can apply machine-readably. The block MUST be exactly:\n\n"
+        f"{_DOC_UPDATES_OPEN}\n"
+        "{\"updates\": [\n"
+        "  {\"path\": \"docs/architecture.md\",\n"
+        "   \"reason\": \"why this update is needed\",\n"
+        "   \"new_content\": \"FULL replacement content for the file\"}\n"
+        "]}\n"
+        f"{_DOC_UPDATES_CLOSE}\n\n"
+        "Rules for the updates block:\n"
+        "  - `path` MUST be one of: 'README.md', '.smrt/Project.md', or "
+        "    'docs/<...>.md'. No other paths are accepted.\n"
+        "  - `new_content` is the COMPLETE new file contents (not a diff). "
+        "    The system writes the file verbatim from this string.\n"
+        "  - Only propose updates that are actually warranted by the fix. "
+        "    If nothing needs updating, emit `{\"updates\": []}`.\n"
+        "  - Be conservative: the user must approve before these are written. "
+        "    Don't propose stylistic rewrites — only updates whose absence "
+        "    would leave the docs out of sync with the fixed behavior.\n\n"
+        "Be factual. The verified evidence is the ground truth — your "
+        "summary must be consistent with it. Keep the markdown narrative "
+        "under ~400 words."
     )
     user_msg = (
         f"Bug ticket (with any in-loop QA feedback already appended):\n"
@@ -487,15 +679,23 @@ async def _get_qa_final_summary(
         f"Loop ran for {attempt_count} {attempt_word}. "
         f"Final pytest output:\n```\n{last_recheck}\n```"
         f"{extra_clause}\n\n"
-        "Write the compiled Fix Summary now, grounded in the verified evidence "
-        "block from the system message."
+        "Write the compiled Fix Summary now (markdown narrative, then the "
+        "[DOC_UPDATES_JSON] block), grounded in the verified evidence and "
+        "documentation snapshot from the system message."
     )
     messages: list[dict] = [{"role": "user", "content": user_msg}]
     collected: list[str] = []
 
     async def on_text(text: str) -> None:
         collected.append(text)
-        await queue.put({"type": "qa_text_delta", "text": text, "agent": "qa", "ts": _ts()})
+        # text_delta with agent='reviewer' so the AgentTimeline routes the
+        # streamed tokens to the new "Reviewer Summary" phase (blue brand).
+        await queue.put({
+            "type": "reviewer_text_delta",
+            "text": text,
+            "agent": "reviewer",
+            "ts": _ts(),
+        })
 
     try:
         response = await llm_client.stream_turn(
@@ -506,20 +706,27 @@ async def _get_qa_final_summary(
             on_text=on_text,
         )
     except Exception as exc:
-        # Best-effort: the QA narrative is valuable but not critical. If the
-        # LLM call fails (rate limit, transient network), we still want the
-        # loop's terminal session_status to fire so the UI doesn't hang.
+        # Best-effort: the Reviewer narrative is valuable but not critical.
+        # If the LLM call fails, still emit a final_summary event so the
+        # UI doesn't hang and the persisted summary records the failure.
         await queue.put({
-            "type": "qa_final_summary",
+            "type": "reviewer_final_summary",
             "ticket_id": ticket_id,
             "session_id": session_id,
             "summary": "",
-            "error": f"QA final summary failed: {exc}",
+            "proposed_doc_updates": [],
+            "error": f"Reviewer final summary failed: {exc}",
             "ts": _ts(),
         })
         return ""
 
-    summary = "".join(collected).strip()
+    raw = "".join(collected).strip()
+    # Split the raw response into the user-facing narrative and the
+    # machine-applicable JSON block. Both go onto the persisted summary so
+    # the UI can render the narrative and the Accept handler can apply the
+    # proposed updates.
+    summary = _strip_doc_updates_block(raw)
+    proposed_updates = _parse_doc_updates(raw)
 
     feedback_cost = _qa_cost(response.input_tokens, response.output_tokens, model)
     await queue.put({
@@ -531,10 +738,11 @@ async def _get_qa_final_summary(
         "ts": _ts(),
     })
     await queue.put({
-        "type": "qa_final_summary",
+        "type": "reviewer_final_summary",
         "ticket_id": ticket_id,
         "session_id": session_id,
         "summary": summary,
+        "proposed_doc_updates": proposed_updates,
         "final_status": final_status,
         "ts": _ts(),
     })
@@ -612,6 +820,7 @@ async def run_ticket_fix_session(
     queue: asyncio.Queue,
     on_status_change: Callable[[str], Awaitable[None]] | None = None,
     model_qa: str | None = None,
+    model_reviewer: str | None = None,
     max_questions_per_attempt: int = 0,
     job_id: str | None = None,
 ) -> str:
@@ -707,14 +916,16 @@ async def run_ticket_fix_session(
             # the Coder/QA Verify sections, plus a durable narrative in the
             # persisted Fix Summary.
             if model_qa:
-                await _get_qa_final_summary(
+                await _get_reviewer_final_summary(
                     ticket_content=ticket_content,
                     recheck_outputs=recheck_outputs,
                     final_status="done",
                     final_recommendation=None,
                     extra_context=None,
                     llm_client=llm_client,
-                    model=model_qa,
+                    # Fall back to model_qa when no dedicated reviewer model
+                    # is configured, so older project configs keep working.
+                    model=model_reviewer or model_qa,
                     queue=queue,
                     project_path=project_path,
                     ticket_id=ticket_id,
@@ -760,7 +971,7 @@ async def run_ticket_fix_session(
                 # Final QA narrative — pass the satisfied verdict as extra
                 # context so the summary explains *why* the failing tests are
                 # unrelated, not just that the fix is complete.
-                await _get_qa_final_summary(
+                await _get_reviewer_final_summary(
                     ticket_content=ticket_content,
                     recheck_outputs=recheck_outputs,
                     final_status="done",
@@ -770,7 +981,9 @@ async def run_ticket_fix_session(
                         "tests unrelated). Their reasoning was:\n" + qa_advice
                     ),
                     llm_client=llm_client,
-                    model=model_qa,
+                    # Fall back to model_qa when no dedicated reviewer model
+                    # is configured, so older project configs keep working.
+                    model=model_reviewer or model_qa,
                     queue=queue,
                     project_path=project_path,
                     ticket_id=ticket_id,
@@ -796,7 +1009,7 @@ async def run_ticket_fix_session(
                 # Final QA narrative — surface the test-faulty verdict as
                 # extra context so the summary describes the test-update
                 # plan in narrative form.
-                await _get_qa_final_summary(
+                await _get_reviewer_final_summary(
                     ticket_content=ticket_content,
                     recheck_outputs=recheck_outputs,
                     final_status="loop_exhausted",
@@ -806,7 +1019,9 @@ async def run_ticket_fix_session(
                         "test-update analysis was:\n" + qa_advice
                     ),
                     llm_client=llm_client,
-                    model=model_qa,
+                    # Fall back to model_qa when no dedicated reviewer model
+                    # is configured, so older project configs keep working.
+                    model=model_reviewer or model_qa,
                     queue=queue,
                     project_path=project_path,
                     ticket_id=ticket_id,
@@ -847,8 +1062,8 @@ async def run_ticket_fix_session(
     # _analyze_fix_failure gives a structured recommendation; this pass
     # converts it into a human-readable explanation grounded in the
     # actual ticket text and pytest output.
-    if model_qa:
-        await _get_qa_final_summary(
+    if model_reviewer or model_qa:
+        await _get_reviewer_final_summary(
             ticket_content=ticket_content,
             recheck_outputs=recheck_outputs,
             final_status="loop_exhausted",
@@ -858,7 +1073,7 @@ async def run_ticket_fix_session(
                 f"Heuristic analysis: {analysis['analysis']}"
             ),
             llm_client=llm_client,
-            model=model_qa,
+            model=model_reviewer or model_qa,
             queue=queue,
             project_path=project_path,
             ticket_id=ticket_id,

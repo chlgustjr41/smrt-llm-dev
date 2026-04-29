@@ -61,4 +61,63 @@ describe('ProjectsPage', () => {
 
     await waitFor(() => expect(screen.getByText('my-app')).toBeInTheDocument())
   })
+
+  // ── Dashboard decoration: the page should always teach the user what
+  // SMRT does and how to use it. These guards prevent future refactors
+  // from quietly stripping the educational content.
+
+  it('shows the system tagline and the three agent roles in the hero', async () => {
+    render(<MemoryRouter><ProjectsPage /></MemoryRouter>)
+    // System name is the page H1.
+    expect(screen.getByRole('heading', { level: 1, name: /SMRT Agent/ })).toBeInTheDocument()
+    // The agent-cards section must be present.
+    expect(screen.getByText(/three specialized agents/i)).toBeInTheDocument()
+    // Each agent name appears in MULTIPLE places (card label + body copy
+    // referencing them) — getAllByText asserts they're surfaced and lets
+    // future copy reorganize without breaking this test.
+    expect(screen.getAllByText(/Reviewer/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/QA Agent/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Coder/).length).toBeGreaterThan(0)
+  })
+
+  it('explains the QA ↔ Coder loop and the human gates', async () => {
+    render(<MemoryRouter><ProjectsPage /></MemoryRouter>)
+    expect(screen.getByText(/how the qa.*coder loop works/i)).toBeInTheDocument()
+    // Both human-gate badges must be present so the loop story is complete.
+    expect(screen.getByText(/you approve/i)).toBeInTheDocument()
+    expect(screen.getByText(/you merge/i)).toBeInTheDocument()
+  })
+
+  it('shows the "What\'s new" strip with the recent feature additions', async () => {
+    render(<MemoryRouter><ProjectsPage /></MemoryRouter>)
+    expect(screen.getByText(/what's new/i)).toBeInTheDocument()
+    // Each card title — these are the user-facing features the dashboard
+    // promises so a refactor can't accidentally drop the section.
+    expect(screen.getByText(/Reviewer-written Fix Summaries/i)).toBeInTheDocument()
+    expect(screen.getByText(/Doc generation toggle/i)).toBeInTheDocument()
+    expect(screen.getByText(/Doc updates applied on Accept/i)).toBeInTheDocument()
+    expect(screen.getByText(/QA Advisor with three verdicts/i)).toBeInTheDocument()
+  })
+
+  it('renders a 4-step Quick Start guide', async () => {
+    render(<MemoryRouter><ProjectsPage /></MemoryRouter>)
+    expect(screen.getByText(/quick start/i)).toBeInTheDocument()
+    // Step titles — covers register / audit / qa session / approve flows.
+    expect(screen.getByText(/Register a project/)).toBeInTheDocument()
+    expect(screen.getByText(/Run the Init Audit/)).toBeInTheDocument()
+    expect(screen.getByText(/Run a QA Session/)).toBeInTheDocument()
+    expect(screen.getByText(/Approve fixes via the kanban board/)).toBeInTheDocument()
+  })
+
+  it('promotes the registration form for first-time users (empty project list)', async () => {
+    server.use(http.get('http://localhost/api/projects', () => HttpResponse.json([])))
+    render(<MemoryRouter><ProjectsPage /></MemoryRouter>)
+    // The form section should be highlighted as the call-to-action.
+    await waitFor(() =>
+      expect(screen.getByText(/register your first project/i)).toBeInTheDocument(),
+    )
+    // The bundled fixture is referenced in BOTH the quick-start guide and
+    // the first-time onboarding tip — assert at least one occurrence.
+    expect(screen.getAllByText(/eval-fixtures\/todo-api/).length).toBeGreaterThan(0)
+  })
 })

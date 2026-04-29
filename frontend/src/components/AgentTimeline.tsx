@@ -153,22 +153,24 @@ export function ExpandableLiveThought({ text }: { text: string }) {
 function makePhaseLabel(status: string, fixAttempt?: number): string {
   const attempt = fixAttempt !== undefined ? ` — Attempt ${fixAttempt + 1}` : ''
   switch (status) {
-    case 'qa_running':     return `QA Agent${attempt}`
-    case 'qa_advising':    return `QA Advisor${attempt}`
-    case 'qa_summarizing': return 'QA Final Summary'
-    case 'qa_checking':    return `QA Verify${attempt}`
-    case 'coder_running':  return `Coder${attempt}`
-    case 'hitl_waiting':   return 'Awaiting Approval'
-    case 'done':           return 'Complete'
-    case 'error':          return 'Error'
-    case 'skipped':        return 'Skipped'
-    default:               return status
+    case 'qa_running':           return `QA Agent${attempt}`
+    case 'qa_advising':          return `QA Advisor${attempt}`
+    case 'qa_summarizing':       return 'QA Final Summary'
+    case 'reviewer_summarizing': return 'Reviewer Final Summary'
+    case 'qa_checking':          return `QA Verify${attempt}`
+    case 'coder_running':        return `Coder${attempt}`
+    case 'hitl_waiting':         return 'Awaiting Approval'
+    case 'done':                 return 'Complete'
+    case 'error':                return 'Error'
+    case 'skipped':              return 'Skipped'
+    default:                     return status
   }
 }
 
 function agentFromStatus(status: string): string {
-  if (status.startsWith('coder')) return 'coder'
-  if (status.startsWith('qa'))    return 'qa'
+  if (status.startsWith('coder'))    return 'coder'
+  if (status.startsWith('reviewer')) return 'reviewer'
+  if (status.startsWith('qa'))       return 'qa'
   return 'system'
 }
 
@@ -258,7 +260,7 @@ function groupIntoPhases(events: AgentEvent[], defaultLabel: string): AgentPhase
       current.pytestRunning = true
     } else if (event.type === 'pytest_done') {
       current.pytestRunning = false
-    } else if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(event.type)) {
+    } else if (['text_delta', 'qa_text_delta', 'coder_text_delta', 'reviewer_text_delta'].includes(event.type)) {
       current.textEvents.push(event)
       pendingText += event.text ?? ''
     } else if (event.type === 'tool_use') {

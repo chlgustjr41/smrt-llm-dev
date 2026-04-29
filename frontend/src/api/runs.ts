@@ -6,8 +6,25 @@ export interface AgentRun {
   status: 'pending' | 'running' | 'done' | 'error'
 }
 
-export function createRun(projectId: number): Promise<AgentRun> {
-  return apiFetch<AgentRun>(`/projects/${projectId}/runs`, { method: 'POST' })
+export interface CreateRunOptions {
+  /** When true (the default), the Reviewer agent also writes README.md
+   *  (if missing/sparse) and technical docs into `docs/`. When false, the
+   *  Reviewer only writes `.smrt/Project.md` and the post-run Obsidian
+   *  doc generator is skipped — useful for an inspection-only pass that
+   *  doesn't touch the user's repo files. */
+  generateDocs?: boolean
+}
+
+export function createRun(
+  projectId: number,
+  options: CreateRunOptions = {},
+): Promise<AgentRun> {
+  const generateDocs = options.generateDocs ?? true
+  return apiFetch<AgentRun>(`/projects/${projectId}/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ generate_docs: generateDocs }),
+  })
 }
 
 export async function getRunEvents(projectId: number, runId: string): Promise<AgentEvent[]> {

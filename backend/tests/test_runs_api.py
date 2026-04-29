@@ -57,6 +57,58 @@ async def test_create_run_returns_202(test_app_with_project):
 
 
 @pytest.mark.asyncio
+async def test_create_run_propagates_generate_docs_flag(test_app_with_project):
+    """The generate_docs flag in the POST body must reach the background
+    _run_task intact. Default-true behavior is verified separately; this
+    test pins down the false path so a future refactor can't silently
+    always-on it.
+
+    We patch _run_task itself (not run_reviewer) — that way the captured
+    fake completes immediately and doesn't leave behind DB writes that
+    would race with subsequent tests' fixture teardown.
+    """
+    test_app, project_id = test_app_with_project
+    captured: dict = {}
+    called = asyncio.Event()
+
+    async def fake_run_task(**kwargs):
+        captured["generate_docs"] = kwargs.get("generate_docs")
+        called.set()
+
+    with patch("smrt_agent.api.runs._run_task", side_effect=fake_run_task):
+        async with AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
+            resp = await client.post(
+                f"/projects/{project_id}/runs",
+                json={"generate_docs": False},
+            )
+            assert resp.status_code == 202
+            await asyncio.wait_for(called.wait(), timeout=2.0)
+
+    assert captured.get("generate_docs") is False
+
+
+@pytest.mark.asyncio
+async def test_create_run_defaults_generate_docs_to_true_when_body_omitted(test_app_with_project):
+    """Backward-compat: callers that POST with no body should still see
+    documentation generated, matching pre-flag behavior."""
+    test_app, project_id = test_app_with_project
+    captured: dict = {}
+    called = asyncio.Event()
+
+    async def fake_run_task(**kwargs):
+        captured["generate_docs"] = kwargs.get("generate_docs")
+        called.set()
+
+    with patch("smrt_agent.api.runs._run_task", side_effect=fake_run_task):
+        async with AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as client:
+            resp = await client.post(f"/projects/{project_id}/runs")
+            assert resp.status_code == 202
+            await asyncio.wait_for(called.wait(), timeout=2.0)
+
+    assert captured.get("generate_docs") is True
+
+
+@pytest.mark.asyncio
 async def test_create_run_for_unknown_project_returns_404(test_app_with_project):
     test_app, _ = test_app_with_project
 

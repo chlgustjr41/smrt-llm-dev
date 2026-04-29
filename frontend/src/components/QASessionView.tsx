@@ -9,7 +9,7 @@ interface Props {
   onComplete?: (status: string) => void
 }
 
-const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta'])
+const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta', 'reviewer_text_delta'])
 
 export function QASessionView({ projectId, sessionId, onComplete }: Props) {
   const [events, setEvents] = useState<AgentEvent[]>([])

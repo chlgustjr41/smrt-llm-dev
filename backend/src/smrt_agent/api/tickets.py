@@ -41,6 +41,9 @@ def _project_config(project_config_json: str | None, settings: Settings) -> dict
     return {
         "model_coder": stored.get("coder_model", settings.model_coder),
         "model_qa": stored.get("qa_model", settings.model_qa),
+        # The Reviewer is the third agent — used in the fix loop's terminal
+        # summary pass to write the Fix Summary and propose doc updates.
+        "model_reviewer": stored.get("reviewer_model", settings.model_reviewer),
         "max_fix_attempts": stored.get("max_fix_attempts", settings.max_fix_attempts),
         "max_questions_per_attempt": stored.get("max_questions_per_attempt", 0),
     }
@@ -148,6 +151,7 @@ async def _launch_ticket_fix(
         llm_client=LLMClient.from_project(project_config_json, settings),
         model_coder=cfg["model_coder"],
         model_qa=cfg["model_qa"],
+        model_reviewer=cfg["model_reviewer"],
         budget_usd=settings.budget_per_ticket_usd,
         max_fix_attempts=cfg["max_fix_attempts"],
         max_questions_per_attempt=cfg["max_questions_per_attempt"],
@@ -417,6 +421,7 @@ async def _ticket_fix_task(
     llm_client: "LLMClient",
     model_coder: str,
     model_qa: str | None = None,
+    model_reviewer: str | None = None,
     budget_usd: float,
     max_fix_attempts: int,
     max_questions_per_attempt: int = 0,
@@ -458,6 +463,7 @@ async def _ticket_fix_task(
             llm_client=llm_client,
             model_coder=model_coder,
             model_qa=model_qa,
+            model_reviewer=model_reviewer,
             budget_usd=budget_usd,
             max_fix_attempts=max_fix_attempts,
             max_questions_per_attempt=max_questions_per_attempt,

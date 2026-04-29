@@ -41,6 +41,18 @@ export interface FixSummaryChange {
   ts?: string | null
 }
 
+export interface ProposedDocUpdate {
+  /** README.md, .smrt/Project.md, or docs/<...>.md only. Other paths are
+   *  rejected by the backend's accept-PR applier. */
+  path: string
+  /** Free-form rationale the Reviewer wrote — surfaced to the user so they
+   *  understand WHY the file should change before accepting. */
+  reason: string
+  /** FULL replacement contents of the file. The backend writes verbatim on
+   *  Accept; we never apply diffs. */
+  new_content: string
+}
+
 export interface FixSummary {
   ticket_id: string
   session_id: string
@@ -49,11 +61,17 @@ export interface FixSummary {
   recommendation: string | null
   analysis: string | null
   qa_early_exit: string | null
-  /** QA-written compiled narrative — the headline of the persisted summary.
-   *  Always populated for any ticket that completed a QA→Coder loop with a
-   *  QA model configured. Null only when no QA model was available or the
-   *  final-summary LLM call failed. */
+  /** Legacy field — populated by sessions written before the Reviewer took
+   *  over the final summary. Frontend falls back to this when
+   *  reviewer_final_summary is null so old tickets still render their
+   *  headline narrative. */
   qa_final_summary: string | null
+  /** The Reviewer's compiled narrative — the headline of the persisted
+   *  Fix Summary for new sessions. */
+  reviewer_final_summary: string | null
+  /** Doc-update proposals the Reviewer queued during its final pass.
+   *  Applied to disk when the user accepts the ticket from Needs Review. */
+  proposed_doc_updates: ProposedDocUpdate[]
   recheck_output: string | null
   changes: FixSummaryChange[]
   completed_at: string

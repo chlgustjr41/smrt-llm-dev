@@ -11,7 +11,10 @@ from smrt_agent.agents import orchestrator
 from smrt_agent.agents.orchestrator import (
     _QA_SATISFIED_SIGNAL,
     _QA_TEST_FAULTY_SIGNAL,
+    _collect_existing_docs,
     _faulty_test_analysis,
+    _parse_doc_updates,
+    _strip_doc_updates_block,
     _summarize_coder_evidence,
     run_ticket_fix_session,
 )
@@ -115,6 +118,100 @@ def test_summarize_coder_evidence_handles_missing_log(tmp_path):
     pass still runs (best-effort)."""
     ev = _summarize_coder_evidence(tmp_path, "sess-missing")
     assert ev == {"files_edited": [], "total_edits": 0, "coder_final_reasoning": ""}
+
+
+# ── Reviewer summary parsing helpers ────────────────────────────────────────
+
+def test_parse_doc_updates_extracts_well_formed_block():
+    raw = (
+        "## What changed\nFlipped the predicate.\n\n"
+        "[DOC_UPDATES_JSON]\n"
+        "{\"updates\": ["
+        "{\"path\": \"docs/architecture.md\", \"reason\": \"keep docs aligned\", "
+        "\"new_content\": \"# Architecture\\nUpdated.\"}"
+        "]}\n"
+        "[/DOC_UPDATES_JSON]"
+    )
+    updates = _parse_doc_updates(raw)
+    assert len(updates) == 1
+    assert updates[0]["path"] == "docs/architecture.md"
+    assert updates[0]["reason"] == "keep docs aligned"
+    assert "Updated" in updates[0]["new_content"]
+
+
+def test_parse_doc_updates_returns_empty_on_missing_block():
+    """Reviewer omitted the block entirely → no proposals (no exception)."""
+    assert _parse_doc_updates("Just narrative, no structured tail.") == []
+
+
+def test_parse_doc_updates_returns_empty_on_malformed_json():
+    """Malformed JSON inside the markers must not crash the loop — the
+    narrative is still valuable even if proposals fail to parse."""
+    raw = (
+        "narrative\n[DOC_UPDATES_JSON]\nthis is not json{{{\n[/DOC_UPDATES_JSON]"
+    )
+    assert _parse_doc_updates(raw) == []
+
+
+def test_parse_doc_updates_skips_entries_missing_required_fields():
+    raw = (
+        "[DOC_UPDATES_JSON]\n"
+        "{\"updates\": ["
+        "{\"path\": \"docs/ok.md\", \"new_content\": \"valid\"},"
+        "{\"path\": \"\", \"new_content\": \"empty path skipped\"},"
+        "{\"reason\": \"missing path entirely\"}"
+        "]}\n"
+        "[/DOC_UPDATES_JSON]"
+    )
+    updates = _parse_doc_updates(raw)
+    assert len(updates) == 1
+    assert updates[0]["path"] == "docs/ok.md"
+
+
+def test_strip_doc_updates_block_removes_json_tail():
+    raw = (
+        "## Summary\n\nbody text\n\n"
+        "[DOC_UPDATES_JSON]\n{\"updates\": []}\n[/DOC_UPDATES_JSON]"
+    )
+    assert _strip_doc_updates_block(raw) == "## Summary\n\nbody text"
+
+
+def test_strip_doc_updates_block_returns_full_text_when_no_marker():
+    assert _strip_doc_updates_block("just narrative") == "just narrative"
+
+
+# ── Existing docs collector ────────────────────────────────────────────────
+
+def test_collect_existing_docs_returns_empty_for_pristine_project(tmp_path):
+    out = _collect_existing_docs(tmp_path)
+    assert out["project_md"] == ""
+    assert out["readme"] == ""
+    assert out["docs_index"] == []
+
+
+def test_collect_existing_docs_picks_up_project_md_readme_and_docs(tmp_path):
+    (tmp_path / ".smrt").mkdir()
+    (tmp_path / ".smrt" / "Project.md").write_text("# Project\nfoo", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Readme\nshort", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "architecture.md").write_text("# Arch\nlayered", encoding="utf-8")
+    (tmp_path / "docs" / "modules").mkdir()
+    (tmp_path / "docs" / "modules" / "auth.md").write_text("# Auth\nstuff", encoding="utf-8")
+
+    out = _collect_existing_docs(tmp_path)
+    assert "Project" in out["project_md"]
+    assert "Readme" in out["readme"]
+    paths = [d["path"] for d in out["docs_index"]]
+    assert "docs/architecture.md" in paths
+    assert "docs/modules/auth.md" in paths
+
+
+def test_collect_existing_docs_truncates_large_readme(tmp_path):
+    (tmp_path / "README.md").write_text("x" * 5000, encoding="utf-8")
+    out = _collect_existing_docs(tmp_path)
+    # Cap kicks in: head + truncation marker + tail
+    assert "(middle truncated)" in out["readme"]
+    assert len(out["readme"]) < 5000
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -423,11 +520,13 @@ async def test_qa_final_summary_prompt_omits_no_op_clause_when_coder_did_edit(tm
 
 
 @pytest.mark.asyncio
-async def test_first_pass_success_emits_qa_final_summary_phase(tmp_path):
-    """When tests pass on the first attempt the loop must STILL run the QA
-    Final Summary pass — every successful ticket should have a qa_summarizing
-    phase visible in the timeline AFTER Coder/QA Verify, plus a
-    qa_final_summary event captured for the persisted Fix Summary."""
+async def test_first_pass_success_emits_reviewer_final_summary_phase(tmp_path):
+    """When tests pass on the first attempt the loop must STILL run the
+    Reviewer Final Summary pass — every successful ticket should have a
+    reviewer_summarizing phase visible in the timeline AFTER Coder/QA
+    Verify, plus a reviewer_final_summary event captured for the persisted
+    Fix Summary. The Reviewer is the third agent (not the QA agent) — this
+    test pins the agent assignment so a future refactor can't regress."""
     project_path = tmp_path
     tickets_dir = project_path / ".smrt" / "tickets"
     tickets_dir.mkdir(parents=True)
@@ -435,13 +534,16 @@ async def test_first_pass_success_emits_qa_final_summary_phase(tmp_path):
     (tickets_dir / f"{ticket_id}.md").write_text("# T\n\n**Title:** broken\n", encoding="utf-8")
 
     queue: asyncio.Queue = asyncio.Queue()
-    # The QA model is invoked exactly once on the success path — for the
-    # final summary. Stub it to return a markdown narrative.
+    # The Reviewer model is invoked once on the success path. Stub it to
+    # return narrative + the structured doc-updates JSON tail.
     summary_text = (
         "## What the bug was\nThe predicate was inverted.\n\n"
         "## What changed\n- Flipped the condition in routers/products.py.\n\n"
         "## Why this works\nThe filter now correctly excludes deleted items.\n\n"
-        "## Final test status\n1 passed in 0.5s"
+        "## Final test status\n1 passed in 0.5s\n\n"
+        "[DOC_UPDATES_JSON]\n"
+        "{\"updates\": []}\n"
+        "[/DOC_UPDATES_JSON]"
     )
     stub_llm = _make_stub_llm_yielding(summary_text)
 
@@ -463,6 +565,7 @@ async def test_first_pass_success_emits_qa_final_summary_phase(tmp_path):
             max_fix_attempts=3,
             queue=queue,
             model_qa="model-q",
+            model_reviewer="model-r",
             max_questions_per_attempt=0,
         )
 
@@ -470,29 +573,87 @@ async def test_first_pass_success_emits_qa_final_summary_phase(tmp_path):
     assert coder_calls == [0]  # only one attempt was needed
 
     events = _drain_queue(queue)
-    # Sequence requirement from the user: QA Final Summary phase appears
-    # AFTER the Coder and QA Verify phases.
+    # Sequence requirement: Reviewer Final Summary phase appears AFTER the
+    # Coder and QA Verify phases.
     statuses = [
         e["status"] for e in events
         if e.get("type") == "session_status"
     ]
     assert "coder_running" in statuses
     assert "qa_checking" in statuses
-    assert "qa_summarizing" in statuses
+    assert "reviewer_summarizing" in statuses
     assert "done" in statuses
-    # Order check: qa_summarizing must come after the LAST qa_checking and
-    # before the terminal `done`.
     last_qa_check_idx = max(i for i, s in enumerate(statuses) if s == "qa_checking")
-    summarizing_idx = statuses.index("qa_summarizing")
+    summarizing_idx = statuses.index("reviewer_summarizing")
     done_idx = statuses.index("done")
     assert last_qa_check_idx < summarizing_idx < done_idx
 
-    # The qa_final_summary event must carry the narrative we returned from
-    # the stubbed LLM — this is what the persisted Fix Summary captures.
-    final_summary_events = [e for e in events if e.get("type") == "qa_final_summary"]
+    # The reviewer_final_summary event carries the narrative AND the
+    # parsed proposed_doc_updates list (empty here since the stub said so).
+    final_summary_events = [e for e in events if e.get("type") == "reviewer_final_summary"]
     assert len(final_summary_events) == 1
     assert "## What the bug was" in final_summary_events[0]["summary"]
     assert "predicate was inverted" in final_summary_events[0]["summary"]
+    assert final_summary_events[0]["proposed_doc_updates"] == []
+    # The text-stream events use the reviewer agent label, not qa.
+    assert any(e.get("type") == "reviewer_text_delta" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_final_summary_captures_doc_update_proposals(tmp_path):
+    """When the Reviewer's response includes a populated DOC_UPDATES_JSON
+    block, those proposals must flow into the reviewer_final_summary event
+    so the persisted Fix Summary can store them and the Accept handler can
+    apply them later."""
+    project_path = tmp_path
+    tickets_dir = project_path / ".smrt" / "tickets"
+    tickets_dir.mkdir(parents=True)
+    ticket_id = "2026-04-28-DOCS"
+    (tickets_dir / f"{ticket_id}.md").write_text("# T\n", encoding="utf-8")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    summary_text = (
+        "## What changed\nFlipped predicate.\n\n"
+        "[DOC_UPDATES_JSON]\n"
+        "{\"updates\": ["
+        "{\"path\": \"docs/architecture.md\", \"reason\": \"document the predicate convention\", "
+        "\"new_content\": \"# Architecture\\n\\nUpdated.\"}"
+        "]}\n"
+        "[/DOC_UPDATES_JSON]"
+    )
+    stub_llm = _make_stub_llm_yielding(summary_text)
+
+    async def fake_run_coder(**kwargs):
+        return None
+
+    with patch("smrt_agent.agents.orchestrator.run_coder_agent", new=fake_run_coder), \
+         patch("smrt_agent.agents.orchestrator.run_pytest", return_value="1 passed in 0.5s"), \
+         patch("smrt_agent.agents.orchestrator.collect_coverage", return_value=None):
+        await run_ticket_fix_session(
+            session_id="sess-docs",
+            ticket_id=ticket_id,
+            project_path=project_path,
+            llm_client=stub_llm,
+            model_coder="model-c",
+            budget_usd=1.0,
+            max_fix_attempts=3,
+            queue=queue,
+            model_qa="model-q",
+            model_reviewer="model-r",
+            max_questions_per_attempt=0,
+        )
+
+    events = _drain_queue(queue)
+    final = next(e for e in events if e.get("type") == "reviewer_final_summary")
+    # The DOC_UPDATES_JSON block was stripped from the user-facing summary
+    # so the narrative stays clean.
+    assert "DOC_UPDATES_JSON" not in final["summary"]
+    assert "Flipped predicate" in final["summary"]
+    # …but the parsed proposals are surfaced on the event payload for the
+    # persisted Fix Summary.
+    assert len(final["proposed_doc_updates"]) == 1
+    assert final["proposed_doc_updates"][0]["path"] == "docs/architecture.md"
+    assert "Updated" in final["proposed_doc_updates"][0]["new_content"]
 
 
 @pytest.mark.asyncio

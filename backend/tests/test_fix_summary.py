@@ -213,6 +213,53 @@ def test_build_fix_summary_qa_final_summary_skips_empty():
     assert summary["qa_final_summary"] is None
 
 
+def test_build_fix_summary_captures_reviewer_final_summary_with_doc_updates():
+    """The new reviewer_final_summary event flows into both the
+    reviewer_final_summary field AND the proposed_doc_updates list."""
+    events = [
+        {"type": "session_status", "status": "reviewer_summarizing", "ts": "2026-04-28T11:00:00Z"},
+        {"type": "reviewer_text_delta", "text": "## What changed\nPredicate flipped.", "agent": "reviewer"},
+        {
+            "type": "reviewer_final_summary",
+            "ticket_id": "T-9",
+            "session_id": "S-9",
+            "summary": "## What changed\nPredicate flipped in routers/products.py.",
+            "proposed_doc_updates": [
+                {
+                    "path": "docs/architecture.md",
+                    "reason": "documents the predicate convention",
+                    "new_content": "# Architecture\n\nUpdated predicate description.",
+                },
+            ],
+            "final_status": "done",
+        },
+        {"type": "session_status", "status": "done"},
+    ]
+    s = build_fix_summary_from_events(events, ticket_id="T-9", session_id="S-9", final_status="done")
+    assert s["reviewer_final_summary"] is not None
+    assert "Predicate flipped" in s["reviewer_final_summary"]
+    assert len(s["proposed_doc_updates"]) == 1
+    assert s["proposed_doc_updates"][0]["path"] == "docs/architecture.md"
+    # Legacy qa_final_summary stays None when only the new event was emitted.
+    assert s["qa_final_summary"] is None
+
+
+def test_build_fix_summary_keeps_qa_final_summary_for_legacy_sessions():
+    """Sessions persisted before the Reviewer-summary refactor still emit
+    qa_final_summary. Those must continue to surface so old Fix Summaries
+    don't silently lose their headline."""
+    events = [
+        {
+            "type": "qa_final_summary",
+            "summary": "Legacy QA summary text",
+        },
+    ]
+    s = build_fix_summary_from_events(events, ticket_id="T-x", session_id="S-x", final_status="done")
+    assert s["qa_final_summary"] == "Legacy QA summary text"
+    assert s["reviewer_final_summary"] is None
+    assert s["proposed_doc_updates"] == []
+
+
 def test_build_fix_summary_qa_final_summary_is_none_when_event_absent():
     """Pre-existing sessions that ran before the qa_final_summary event was
     introduced should still produce a valid summary dict — qa_final_summary

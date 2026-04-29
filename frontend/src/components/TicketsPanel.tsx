@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { GfmMarkdown } from './GfmMarkdown'
-import { listTickets, approveTicket, cancelTicket, closeTicket, requeueTicket, resetTicket, getTicketSessions, getFixSummary, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport, type FixSummary, type FixSummaryChange } from '../api/tickets'
+import { listTickets, approveTicket, cancelTicket, closeTicket, requeueTicket, resetTicket, getTicketSessions, getFixSummary, type Ticket, type TicketStatus, type TicketSession, type TicketFailureReport, type FixSummary, type FixSummaryChange, type ProposedDocUpdate } from '../api/tickets'
 import { getCoderStatus, type CoderStatus } from '../api/coder'
 import { getQASessionEvents } from '../api/qa_sessions'
 import { acceptPR, rejectPR } from '../api/pr'
@@ -158,7 +158,7 @@ function groupFileChanges(events: AgentEvent[]): FileChange[] {
   const changes: FileChange[] = []
   let pendingText = ''
   for (const ev of events) {
-    if (['text_delta', 'qa_text_delta', 'coder_text_delta'].includes(ev.type)) {
+    if (['text_delta', 'qa_text_delta', 'coder_text_delta', 'reviewer_text_delta'].includes(ev.type)) {
       pendingText += ev.text ?? ''
     } else if (ev.type === 'tool_use' && FILE_WRITE_TOOLS.has(ev.tool ?? '')) {
       const path = extractFilePath(ev.input)
@@ -193,11 +193,18 @@ function FixSummaryTab({
   const [changes, setChanges] = useState<FileChange[]>([])
   const [recheckOutput, setRecheckOutput] = useState<string | null>(null)
   const [qaEarlyExit, setQaEarlyExit] = useState<string | null>(null)
-  const [qaFinalSummary, setQaFinalSummary] = useState<string | null>(null)
+  // We render whichever final-summary string is present. New sessions
+  // populate `reviewer_final_summary`; legacy sessions populate
+  // `qa_final_summary`. The `summarySource` label tells the user which
+  // agent wrote the headline so they're not confused by the byline switch.
+  const [finalSummary, setFinalSummary] = useState<string | null>(null)
+  const [summaryAuthor, setSummaryAuthor] = useState<'reviewer' | 'qa' | null>(null)
+  const [proposedDocUpdates, setProposedDocUpdates] = useState<ProposedDocUpdate[]>([])
   const [finalStatus, setFinalStatus] = useState<string | null>(null)
   const [completedAt, setCompletedAt] = useState<string | null>(null)
   const [source, setSource] = useState<'persisted' | 'reconstructed' | null>(null)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const [expandedDocUpdate, setExpandedDocUpdate] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -217,7 +224,16 @@ function FixSummaryTab({
           })))
           setRecheckOutput(persisted.recheck_output)
           setQaEarlyExit(persisted.qa_early_exit)
-          setQaFinalSummary(persisted.qa_final_summary)
+          // Prefer the Reviewer's narrative; fall back to legacy QA summary
+          // for sessions persisted before the Reviewer took over the role.
+          if (persisted.reviewer_final_summary) {
+            setFinalSummary(persisted.reviewer_final_summary)
+            setSummaryAuthor('reviewer')
+          } else if (persisted.qa_final_summary) {
+            setFinalSummary(persisted.qa_final_summary)
+            setSummaryAuthor('qa')
+          }
+          setProposedDocUpdates(persisted.proposed_doc_updates ?? [])
           setFinalStatus(persisted.final_status)
           setCompletedAt(persisted.completed_at)
           setSource('persisted')
@@ -241,11 +257,21 @@ function FixSummaryTab({
           if (rc) setRecheckOutput(rc.output ?? null)
           const earlyExit = events.find((e) => e.type === 'qa_early_exit')
           if (earlyExit) setQaEarlyExit(earlyExit.reasoning ?? 'QA satisfied.')
-          // Reconstruct the QA narrative from the last qa_final_summary event
-          // when no persisted summary file exists yet (e.g. older sessions).
-          const fs = [...events].reverse().find((e) => e.type === 'qa_final_summary')
-          if (fs && typeof fs.summary === 'string' && fs.summary.trim()) {
-            setQaFinalSummary(fs.summary)
+          // Reconstruct the headline narrative from whichever final-summary
+          // event the legacy session emitted. New sessions emit
+          // reviewer_final_summary; older sessions emit qa_final_summary.
+          const reviewerFs = [...events].reverse().find((e) => e.type === 'reviewer_final_summary')
+          const qaFs = [...events].reverse().find((e) => e.type === 'qa_final_summary')
+          const chosen = (reviewerFs && typeof reviewerFs.summary === 'string' && reviewerFs.summary.trim())
+            ? { event: reviewerFs, author: 'reviewer' as const }
+            : (qaFs && typeof qaFs.summary === 'string' && qaFs.summary.trim())
+              ? { event: qaFs, author: 'qa' as const }
+              : null
+          if (chosen) {
+            setFinalSummary(chosen.event.summary as string)
+            setSummaryAuthor(chosen.author)
+            const updates = (chosen.event as unknown as { proposed_doc_updates?: ProposedDocUpdate[] }).proposed_doc_updates
+            if (Array.isArray(updates)) setProposedDocUpdates(updates)
           }
           setSource('reconstructed')
           setLoading(false)
@@ -275,7 +301,7 @@ function FixSummaryTab({
   // No persisted summary AND no reconstructed events — show a friendly empty
   // state. This is the normal state for tickets that haven't entered the fix
   // loop yet (e.g. fresh pending_confirmation).
-  if (changes.length === 0 && !recheckOutput && !qaEarlyExit && !qaFinalSummary && !finalStatus) {
+  if (changes.length === 0 && !recheckOutput && !qaEarlyExit && !finalSummary && !finalStatus) {
     return (
       <div className="px-5 py-8 text-sm text-gray-400 italic text-center">
         No fix session has been recorded for this ticket yet. Drag the ticket
@@ -321,20 +347,85 @@ function FixSummaryTab({
     <div className="p-5 space-y-4">
       {headerBanner}
 
-      {/* QA Final Summary — the headline of the Fix Summary tab. This is the
-          QA-written narrative compiled at the end of every fix loop (success
-          or failure). It belongs at the very top because it's the "what
-          should I know about this ticket?" answer for any reviewer. */}
-      {qaFinalSummary && (
-        <div className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-violet-500">🧠</span>
-            <p className="text-xs font-semibold text-violet-800 uppercase tracking-wide">
-              QA Final Summary
-            </p>
+      {/* Final Summary — the headline of the Fix Summary tab. Written by
+          the Reviewer agent (third perspective) for new sessions; legacy
+          sessions show whichever agent originally wrote it. The byline
+          color follows the agent that authored it. */}
+      {finalSummary && (() => {
+        const isReviewer = summaryAuthor === 'reviewer'
+        const palette = isReviewer
+          ? { bg: 'bg-blue-50', border: 'border-blue-200', icon: 'text-blue-500', label: 'text-blue-800', heading: 'text-blue-900', code: 'bg-white/70', pre: 'border-blue-200', th: 'border-blue-300' }
+          : { bg: 'bg-violet-50', border: 'border-violet-200', icon: 'text-violet-500', label: 'text-violet-800', heading: 'text-violet-900', code: 'bg-white/70', pre: 'border-violet-200', th: 'border-violet-300' }
+        const headline = isReviewer ? 'Reviewer Final Summary' : 'QA Final Summary'
+        const icon = isReviewer ? '🔍' : '🧠'
+        return (
+          <div className={`rounded-lg border ${palette.border} ${palette.bg} px-4 py-3`}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className={palette.icon}>{icon}</span>
+              <p className={`text-xs font-semibold ${palette.label} uppercase tracking-wide`}>
+                {headline}
+              </p>
+            </div>
+            <div className={`prose prose-sm max-w-none text-sm text-gray-800 leading-relaxed [&_h1]:text-base [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:font-semibold [&_h2]:${palette.heading} [&_h3]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_code]:${palette.code} [&_code]:px-1 [&_code]:rounded [&_code]:text-[12px] [&_pre]:bg-white/80 [&_pre]:border [&_pre]:${palette.pre} [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:${palette.th} [&_th]:bg-white/70 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:${palette.pre} [&_td]:px-2 [&_td]:py-1`}>
+              <GfmMarkdown>{finalSummary}</GfmMarkdown>
+            </div>
           </div>
-          <div className="prose prose-sm max-w-none text-sm text-gray-800 leading-relaxed [&_h1]:text-base [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:font-semibold [&_h2]:text-violet-900 [&_h3]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_code]:bg-white/70 [&_code]:px-1 [&_code]:rounded [&_code]:text-[12px] [&_pre]:bg-white/80 [&_pre]:border [&_pre]:border-violet-200 [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-[11px] [&_table]:border-collapse [&_table]:w-full [&_th]:border [&_th]:border-violet-300 [&_th]:bg-white/70 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_td]:border [&_td]:border-violet-200 [&_td]:px-2 [&_td]:py-1">
-            <GfmMarkdown>{qaFinalSummary}</GfmMarkdown>
+        )
+      })()}
+
+      {/* Proposed documentation updates — queued by the Reviewer during its
+          final-summary pass. Applied to disk when the user accepts the
+          ticket from Needs Review. Each entry is collapsible so users can
+          inspect the full new-content before approving. */}
+      {proposedDocUpdates.length > 0 && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50/40 px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-blue-600">📝</span>
+            <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">
+              Proposed documentation updates
+            </p>
+            <span className="text-xs text-blue-600 font-medium ml-auto">
+              {proposedDocUpdates.length} file{proposedDocUpdates.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <p className="text-xs text-blue-800/80 mb-2 italic">
+            These will be written to disk when you accept this ticket from Needs Review.
+          </p>
+          <div className="space-y-2">
+            {proposedDocUpdates.map((upd, i) => {
+              const isOpen = expandedDocUpdate === i
+              return (
+                <div key={i} className="rounded-md border border-blue-200 bg-white overflow-hidden">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-blue-50/50 transition-colors"
+                    onClick={() => setExpandedDocUpdate(isOpen ? null : i)}
+                  >
+                    <span className="text-blue-400 text-[10px] w-3 text-center">{isOpen ? '▾' : '▸'}</span>
+                    <span className="font-mono text-xs text-blue-800 flex-1 truncate">{upd.path}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium shrink-0">
+                      doc update
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-blue-100 p-3 space-y-2 bg-white animate-fade-in">
+                      {upd.reason && (
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-blue-400 mb-1">Why</p>
+                          <p className="text-xs text-gray-700 leading-relaxed">{upd.reason}</p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-blue-400 mb-1">New content (full file)</p>
+                        <pre className="text-[11px] p-2 rounded border border-blue-100 bg-blue-50/40 text-gray-700 whitespace-pre-wrap leading-relaxed font-mono max-h-72 overflow-y-auto">
+                          {upd.new_content}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
@@ -460,7 +551,7 @@ function FixSummaryTab({
 
 // ── Per-session event pane (polls JSONL for live sessions) ─────────────────
 
-const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta'])
+const TEXT_DELTA_TYPES = new Set(['text_delta', 'qa_text_delta', 'coder_text_delta', 'reviewer_text_delta'])
 
 function SessionEventPane({
   projectId,

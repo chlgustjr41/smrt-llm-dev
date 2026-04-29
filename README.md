@@ -27,16 +27,24 @@ Three agents, each on a scoped tool allowlist, collaborate on a bounded set of r
 
 | Agent          | Default model           | Role                                                                                              |
 |----------------|-------------------------|---------------------------------------------------------------------------------------------------|
-| **Reviewer**   | `claude-haiku-4-5`      | Reads source, writes `.smrt/Project.md`, generates Obsidian-flavored docs in `docs/`              |
-| **QA**         | `claude-haiku-4-5`      | Writes pytest tests, runs them in a sandboxed Docker container, opens bug tickets with confidence |
-| **Coder**      | `claude-sonnet-4-6`     | Implements fixes proposed by QA — never sees the tests (blackbox loop)                            |
+| **Reviewer**   | `claude-haiku-4-5`      | Reads source, writes `.smrt/Project.md`, optionally generates `README.md` + Obsidian-flavored docs in `docs/`. Also writes the **third-perspective Fix Summary** at the end of every QA-Coder loop and proposes documentation updates. |
+| **QA**         | `claude-haiku-4-5`      | Writes pytest tests, runs them in a sandboxed Docker container, opens bug tickets with confidence. Also acts as a **per-attempt QA Advisor** that returns one of three verdicts: *satisfied*, *needs more attempts*, or *test_faulty*. |
+| **Coder**      | `claude-sonnet-4-6`     | Implements fixes proposed by QA — never sees the tests (blackbox loop). Aware of attempt count and prior-attempt feedback so it doesn't repeat failed approaches. |
 
-The **QA↔Coder loop** repeats up to `SMRT_MAX_FIX_ATTEMPTS` times (default `3`). If QA still rejects, the ticket is escalated to **Needs Review** with a structured failure report.
+The **QA↔Coder loop** repeats up to `SMRT_MAX_FIX_ATTEMPTS` times (default `3`). On each failed attempt, the QA Advisor weighs in with one of three structured verdicts:
+
+- **CASE A — fix is correct** (failing tests are unrelated): mark the ticket ready for review.
+- **CASE B — fix is wrong**: actionable feedback that the Coder uses on the next attempt.
+- **CASE C — the *test* is faulty**: halt the loop and route the ticket to **Needs Review** with a test-update proposal.
+
+If neither A nor C fires within `SMRT_MAX_FIX_ATTEMPTS`, the ticket is escalated to **Needs Review** with a heuristic failure report (`needs_more_attempts` / `possibly_not_a_bug`).
+
+After the loop, the **Reviewer agent** writes the **compiled Fix Summary** (a third perspective beyond Coder and QA), reads the existing project docs, and queues any documentation updates the fix necessitates. These are stored in `.smrt/fix-summaries/<session-id>.json` and survive across sessions.
 
 **Two human gates** anchor the loop:
 
 1. **Bug confirmation** — drag a ticket from *Pending Confirmation* → *In Progress* to launch the Coder.
-2. **PR acceptance** — when QA certifies a fix, drag the ticket from *Needs Review* → *Closed* to merge, or back to *In Progress* to retry.
+2. **PR acceptance** — when QA certifies a fix, drag the ticket from *Needs Review* → *Closed* to merge. **Accepting also applies the Reviewer's queued documentation updates.** Drag back to *In Progress* to retry.
 
 A third gate fires **interactively** when an agent hits its budget ceiling: a *budget_pause* SSE event surfaces a "Continue (+20% grace) / Terminate" dialog in the UI. Default timeout: 120 s → terminate.
 
@@ -83,14 +91,14 @@ Open **http://127.0.0.1:5173** in your browser.
 
 | UI action                                           | What happens                                                                                              |
 |-----------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-| **Run Init Audit** (Overview tab)                   | Reviewer reads the codebase, writes `.smrt/Project.md`, populates `docs/modules/` and `docs/api/`         |
+| **Run Init Audit** (Overview tab) — with **📝 Generate docs** checked | Reviewer reads the codebase, writes `.smrt/Project.md`, **also writes `README.md` (when missing/sparse) and `docs/architecture.md` + `docs/modules/*.md`** if the toggle is on. Uncheck the toggle for an inspection-only audit that touches only `.smrt/`. |
 | **Find Bugs** (Overview tab)                        | QA writes pytests, runs them in the Docker sandbox, files tickets in **Pending Confirmation**             |
-| **Drag ticket → In Progress**                       | Spawns a per-ticket QA↔Coder session. AgentTimeline streams thoughts via SSE.                             |
-| **Drag ticket → Needs Review** *(automatic on fix)* | QA has accepted the patch; the diff is now ready for human review                                         |
-| **Drag ticket → Closed**                            | PR is accepted; the agent commits the fix and emits a `[smrt-provenance]` JSON trailer in the commit body |
+| **Drag ticket → In Progress**                       | Spawns a per-ticket QA↔Coder session. AgentTimeline streams thoughts via SSE. After the loop ends, the **Reviewer Final Summary** phase writes the compiled Fix Summary and proposes any doc updates. |
+| **Drag ticket → Needs Review** *(automatic on fix)* | QA has accepted the patch; the diff is now ready for human review. The Reviewer's compiled Fix Summary appears as the headline of the **Fix Summary** tab; any proposed doc updates are listed below. |
+| **Drag ticket → Closed**                            | PR is accepted: the agent commits the fix, emits a `[smrt-provenance]` JSON trailer, **and applies any proposed documentation updates** (README.md / docs/*.md / .smrt/Project.md) the Reviewer queued. |
 | **Drag ticket back → In Progress**                  | PR rejected; loop restarts (within `SMRT_MAX_FIX_ATTEMPTS`)                                               |
 
-Toggle **Show reasoning** in the AgentTimeline to expose the agent's intermediate thoughts. Toggle **Programmatic mode** in the Tests tab to hide thoughts and show only test outcomes.
+Toggle **Show reasoning** in the AgentTimeline to expose each agent's intermediate thoughts. Use **Collapse all / Expand all** at the top of any timeline to manage long agent logs. The Fix Summary tab updates live — leave it open through the loop and it'll refresh as soon as the Reviewer's narrative is ready.
 
 ### 5. Inspect results
 
@@ -257,7 +265,13 @@ Three end-to-end scenarios you can run after [§Quickstart step 2](#2-start-the-
 
 ## Configuration
 
-Copy `.env.example` to `.env`. All env vars can be overridden per-project in the UI **Config** tab.
+Configuration lives in two layered files plus the per-project UI **Config** tab:
+
+1. **`.env`** (repo root, gitignored) — secrets and runtime/server settings: `ANTHROPIC_API_KEY`, `USE_LOCAL_LLM`, ports, budgets, log level. Copy `.env.example` to start.
+2. **`backend/.config`** (gitignored) — agent defaults the team commits as `backend/.config.example`: model choices, loop caps, UI toggles. These are the *initial* values for any newly-registered project.
+3. **`<project>/.smrt/config.json`** — per-project overrides set via the UI's Config tab. Created on first save.
+
+**Loading order** (later wins): `backend/.config` → `.env` → process environment → per-project `config.json`. So per-project tweaks always take precedence; `.env` is the per-developer override layer; `backend/.config` is the team baseline.
 
 ### Required
 
@@ -341,17 +355,20 @@ smrt-llm-dev/
 ├── backend/                   # FastAPI service
 │   ├── Dockerfile.dev
 │   ├── pyproject.toml
+│   ├── .config.example        # team-shared agent defaults (copy to .config)
 │   └── src/smrt_agent/
 │       ├── main.py            # app factory, router registration
-│       ├── settings.py        # pydantic-settings, .env discovery
+│       ├── settings.py        # pydantic-settings; .env + backend/.config discovery
 │       ├── llm.py             # provider routing (Anthropic | local OpenAI-compatible)
 │       ├── agents/            # orchestrator, budget_gateway, coder/, qa/, reviewer/
+│       │   └── orchestrator.py # QA↔Coder loop + Reviewer Final Summary pass
 │       ├── api/               # REST + SSE routers (one file per resource)
 │       ├── docs/              # backends.py (Obsidian writer), parser.py, service.py
+│       ├── fix_summary.py     # persistent Fix Summary builder + index
 │       ├── sandbox/           # docker SDK wrapper, smrt-exec.py CPU/RAM caps
 │       ├── db/                # SQLAlchemy async, schema migrations
 │       ├── hooks/             # secret_guard_hook, .agentignore enforcement
-│       ├── prompts/           # per-agent system prompts (jinja templates)
+│       ├── prompts/           # per-agent system prompts
 │       ├── event_log.py       # JSONL append + SSE replay
 │       └── scheduler.py       # periodic checkup APScheduler job
 │
@@ -376,7 +393,12 @@ smrt-llm-dev/
     ├── Project.md             # Reviewer-maintained living spec
     ├── config.json            # per-project UI overrides
     ├── qa-sessions/           # JSONL event logs per session
-    ├── tickets/               # JSONL event logs per ticket
+    ├── tickets/               # bug ticket markdown files
+    ├── pending-prs.jsonl      # tickets that passed QA, awaiting Accept
+    ├── failed-fixes.jsonl     # loop-exhausted tickets in Needs Review
+    ├── fix-summaries/         # Reviewer-written Fix Summaries — durable
+    │   ├── index.json         #   ticket_id → latest_session_id
+    │   └── <session_id>.json  #   one per session, with proposed_doc_updates
     └── knowledge/             # bugs-resolved.jsonl, test-status.yaml
 ```
 

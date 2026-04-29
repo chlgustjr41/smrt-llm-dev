@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from smrt_agent.agents.reviewer.loop import run_reviewer
 from smrt_agent.agents import budget_gateway
-from smrt_agent.docs.service import generate_docs
+from smrt_agent.docs.service import generate_docs as _generate_docs
 from smrt_agent.knowledge import compute_doc_score, record_doc_score
 from smrt_agent.api.deps import get_db
 from smrt_agent.api.schemas import RunCreatedResponse
@@ -33,10 +33,28 @@ _queues: dict[str, asyncio.Queue] = {}
 async def create_run(
     project_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    body: dict | None = None,
 ) -> RunCreatedResponse:
+    """Start an Init Audit run for a project.
+
+    Optional body:
+        {"generate_docs": bool}  — defaults to True. When False, the
+        Reviewer skips README/docs generation and the post-run
+        generate_docs() pass is skipped.
+
+    The body is intentionally a free-form dict to keep this endpoint
+    backward-compatible: existing callers that POST with no body still get
+    the original behavior.
+    """
     project = await db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Default to True to preserve current behavior for any client that
+    # hasn't been updated to the new contract.
+    generate_docs_flag = True
+    if isinstance(body, dict) and "generate_docs" in body:
+        generate_docs_flag = bool(body["generate_docs"])
 
     run_id = str(uuid.uuid4())
     agent_run = AgentRun(run_id=run_id, project_id=project_id, status="pending")
@@ -63,6 +81,7 @@ async def create_run(
             model=settings.model_reviewer,
             budget_usd=settings.budget_per_run_usd,
             job_id=run_id,
+            generate_docs=generate_docs_flag,
         )
     )
 
@@ -79,6 +98,7 @@ async def _run_task(
     model: str,
     budget_usd: float,
     job_id: str | None = None,
+    generate_docs: bool = True,
 ) -> None:
     final_status = "error"
     try:
@@ -103,6 +123,7 @@ async def _run_task(
             budget_usd=budget_usd,
             queue=queue,
             job_id=job_id,
+            generate_docs=generate_docs,
         )
         final_status = "done"
 
@@ -122,22 +143,33 @@ async def _run_task(
         except Exception:
             pass
 
-        # Generate docs after audit — best-effort, does not affect run status
-        try:
-            doc_counts = await generate_docs(Path(canonical_path))
+        # Generate docs after audit — best-effort, does not affect run status.
+        # Skipped entirely when the user opted out of doc generation: the
+        # post-run generator parses Project.md to produce module/endpoint
+        # stubs in docs/, which would surprise a user who explicitly chose
+        # an inspection-only run.
+        if generate_docs:
+            try:
+                doc_counts = await _generate_docs(Path(canonical_path))
+                await queue.put({
+                    "type": "docs_written",
+                    "backends": doc_counts["backends"],
+                    "endpoints": doc_counts["endpoints"],
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+                score_entry = compute_doc_score(Path(canonical_path))
+                score_entry["ts"] = datetime.now(timezone.utc).isoformat()
+                record_doc_score(Path(canonical_path), score_entry)
+            except Exception as doc_exc:
+                await queue.put({
+                    "type": "docs_error",
+                    "error": str(doc_exc),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+        else:
             await queue.put({
-                "type": "docs_written",
-                "backends": doc_counts["backends"],
-                "endpoints": doc_counts["endpoints"],
-                "ts": datetime.now(timezone.utc).isoformat(),
-            })
-            score_entry = compute_doc_score(Path(canonical_path))
-            score_entry["ts"] = datetime.now(timezone.utc).isoformat()
-            record_doc_score(Path(canonical_path), score_entry)
-        except Exception as doc_exc:
-            await queue.put({
-                "type": "docs_error",
-                "error": str(doc_exc),
+                "type": "docs_skipped",
+                "reason": "generate_docs flag was disabled for this run",
                 "ts": datetime.now(timezone.utc).isoformat(),
             })
     except Exception as exc:

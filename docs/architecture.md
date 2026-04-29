@@ -63,6 +63,7 @@ Browser
 | `db/` | SQLAlchemy async models: `Project`, `AgentRun`, `QASession` |
 | `settings.py` | Pydantic `Settings` — models, budgets, ports via env vars |
 | `event_log.py` | `EventLogger` — wraps queue, writes `.smrt/runs/*.jsonl` |
+| `fix_summary.py` | Builds + persists `.smrt/fix-summaries/*.json` from JSONL events; index by ticket_id |
 | `knowledge.py` | `compute_doc_score`, `record_doc_score` helpers |
 
 ### Frontend — `frontend/src/`
@@ -84,11 +85,13 @@ Browser
 ## Data Flow
 
 1. **Project registration** — user POSTs a local path; backend validates it is a git repo with Python files; project row written to SQLite.
-2. **Init audit** — `POST /projects/{id}/runs` starts a Reviewer agent task; agent calls `list_files`, `read_file`, `fetch_url` (OpenAPI), then `write_file` to produce `.smrt/Project.md` and seeds `docs/` + `wiki/` via `DocBackend`.
+2. **Init audit** — `POST /projects/{id}/runs` (with optional `{generate_docs: bool}` body) starts a Reviewer agent task; agent calls `list_files`, `read_file`, `fetch_url` (OpenAPI), then `write_file` to produce `.smrt/Project.md`. When `generate_docs=true` it ALSO calls `write_readme` (when missing/sparse) and `write_docs_file` for `docs/architecture.md` and `docs/modules/*.md`. Doc-writer tools are hidden from the model on `generate_docs=false` runs.
 3. **Periodic checkup** — APScheduler fires `POST /projects/{id}/qa-sessions` at 03:00 daily; same path as a manual QA session trigger.
-4. **QA↔Coder loop** — `orchestrator.py` drives: QA runs pytest, writes ticket if confidence ≥ 0.6, emits `hitl_request` event; frontend shows Approve/Skip; on approve, Coder receives ticket (test path redacted) and edits `src/**`; orchestrator re-runs pytest; repeats up to `max_fix_attempts`.
-5. **PR surface** — on QA acceptance, Reviewer bundles a PR summary; the pending PR appears in the Tickets panel for human acceptance.
-6. **Doc generation** — after every successful run, `docs/service.py` calls `GitHubBackend` and `ObsidianBackend` to upsert endpoint and module docs; `compute_doc_score` appends to `.smrt/doc_scores.jsonl`.
+4. **QA↔Coder loop** — `orchestrator.run_ticket_fix_session` drives: pre-coder pytest → Coder edits `src/**` (with attempt-budget awareness and prior-attempt feedback) → re-run pytest → QA Advisor returns one of `[QA_SATISFIED]` / `[QA_TEST_FAULTY]` / no-token feedback. Repeats up to `max_fix_attempts`. Failure path routes to `failed-fixes.jsonl` with `needs_more_attempts` / `possibly_not_a_bug` / `test_faulty` recommendation.
+5. **Reviewer Final Summary** — at every loop terminal (success and failure paths), `_get_reviewer_final_summary` runs: snapshots existing docs, reads coder evidence from JSONL, streams a markdown narrative + a `[DOC_UPDATES_JSON]` block of proposed doc updates. Both go into `.smrt/fix-summaries/<session_id>.json` plus the `index.json` map.
+6. **PR surface** — successful fixes append to `pending-prs.jsonl`; failed fixes append to `failed-fixes.jsonl`. Both surface in the Tickets kanban (Needs Review column for failures, success cards for accepts).
+7. **Accept** — `POST /projects/{id}/pr/{ticket_id}/accept` commits the fix, writes a `[smrt-provenance]` trailer, AND applies the Reviewer's `proposed_doc_updates` via `_apply_proposed_doc_updates` (using `write_readme` / `write_docs_file` / `write_file` with the same path policies as the Reviewer tools).
+8. **Doc generation post-pass** — after every successful audit run that had `generate_docs=true`, `docs/service.py` parses `Project.md` and calls `GitHubBackend` / `ObsidianBackend` to upsert per-endpoint and per-module stub docs; `compute_doc_score` appends to `.smrt/doc_scores.jsonl`.
 
 ## Storage Layout
 
@@ -99,20 +102,30 @@ SQLite (SMRT_DB_PATH / state.db)
 Target repo at /workspace (or local path)
   .smrt/
     Project.md          # Reviewer's living knowledge base
+    config.json         # per-project UI overrides (reviewer/qa/coder model, caps)
     tickets/            # YYYY-MM-DD-NNN.md per bug
     tests/              # QA-generated pytest files
-    runs/               # <run-id>.jsonl event logs
-    qa-sessions/        # <session-id>.jsonl event logs
+    runs/               # <run-id>.jsonl event logs (Reviewer audits)
+    qa-sessions/        # <session-id>.jsonl event logs (per ticket fix)
+    pending-prs.jsonl   # tickets that passed QA, awaiting human Accept
+    failed-fixes.jsonl  # loop-exhausted tickets, with recommendation + analysis
+    fix-summaries/
+      index.json        # ticket_id -> latest_session_id
+      <session_id>.json # Reviewer's compiled narrative + proposed_doc_updates
     test-status.md      # test promotion/demotion state
     bugs-resolved.md    # append-only resolution log
     provenance.jsonl    # [smrt-provenance] entries
     doc_scores.jsonl    # doc completeness history
-  docs/                 # GitHub-native Markdown (GitHubBackend)
-    api/                # per-endpoint .md files + index.md
-    modules/            # per-module .md files
+  README.md             # written by Reviewer when missing/sparse and docs flag is on
+  docs/                 # written by Reviewer (architecture.md, modules/*.md)
+    api/                # per-endpoint .md files + index.md (post-run stubs)
+    modules/            # per-module .md files (Reviewer narrative + post-run stubs)
     decisions/          # ADR files
-  wiki/                 # Obsidian vault (ObsidianBackend)
-    api/, modules/, decisions/  # mirroring docs/ with YAML frontmatter
+
+backend/
+  .config               # team-shared agent defaults (model, caps, UI toggles)
+  .config.example       # committed template — copy to .config on fresh clone
+.env                    # secrets + runtime (ANTHROPIC_API_KEY, ports, budgets)
 ```
 
 ## Docker Topology

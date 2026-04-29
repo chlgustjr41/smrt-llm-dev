@@ -100,3 +100,60 @@ def write_file(project_path: Path, rel_path: str, content: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return f"Wrote {len(content)} bytes to {rel_path}"
+
+
+def write_readme(project_path: Path, content: str) -> str:
+    """Write the project's top-level README.md.
+
+    Always targets `<project_root>/README.md`. The agent is responsible for
+    deciding *whether* to write — it should `read_file('README.md')` first
+    and skip when the existing README is already substantive. We don't
+    enforce that policy in the tool because the threshold is fuzzy and
+    better expressed in the prompt; here we just guarantee the destination
+    is always the project root.
+
+    Returns a status string the agent can act on.
+    """
+    target = (project_path / "README.md").resolve()
+    root = project_path.resolve()
+    if not target.is_relative_to(root):
+        raise PermissionError("Path traversal denied for README.md")
+    target.write_text(content, encoding="utf-8")
+    return f"Wrote {len(content)} bytes to README.md"
+
+
+def write_docs_file(project_path: Path, rel_path: str, content: str) -> str:
+    """Write a technical documentation file inside `docs/`.
+
+    The Reviewer uses this to add file-structure-based documentation that
+    complements the auto-generated module/endpoint stubs. Examples:
+      - docs/architecture.md       — high-level design and layering
+      - docs/modules/auth.md       — deep dive on a specific module
+      - docs/data-model.md         — DB schema or domain model overview
+
+    Path restrictions:
+      - MUST start with `docs/`
+      - MUST end with `.md`
+      - No path traversal (resolved path must stay inside project root)
+      - Filename must not contain spaces or path separators that break
+        Obsidian's vault scanning
+    """
+    if not rel_path.startswith("docs/"):
+        raise PermissionError(
+            f"write_docs_file may only write inside docs/: {rel_path!r}"
+        )
+    if not rel_path.endswith(".md"):
+        raise ValueError(
+            f"write_docs_file path must end in .md: {rel_path!r}"
+        )
+    if ".." in rel_path.split("/"):
+        raise PermissionError(f"Path traversal denied: {rel_path!r}")
+
+    target = (project_path / rel_path).resolve()
+    root = project_path.resolve()
+    if not target.is_relative_to(root):
+        raise PermissionError(f"Path traversal denied: {rel_path!r}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"Wrote {len(content)} bytes to {rel_path}"

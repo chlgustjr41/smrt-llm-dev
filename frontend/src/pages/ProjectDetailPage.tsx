@@ -482,7 +482,11 @@ function DocsTab({ projectId }: { projectId: number }) {
     )
     if (!confirmed) return
     try {
-      await createRun(projectId)
+      // The Docs tab's "Regenerate All" is *explicitly* about producing
+      // documentation, so we always pass generateDocs=true here. Without
+      // this we'd silently fall back to the default (also true), which
+      // works but makes the contract harder to follow at a glance.
+      await createRun(projectId, { generateDocs: true })
       setRegenMsg('Regeneration started — switch to the Overview tab to monitor progress.')
     } catch (e: unknown) {
       setRegenMsg(e instanceof Error ? e.message : 'Failed to start regeneration')
@@ -946,6 +950,10 @@ export function ProjectDetailPage() {
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
   const [llmProvider, setLlmProvider] = useState<LlmProvider | null>(null)
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null)
+  // Defaults to true so the existing "click and run" experience is unchanged.
+  // Users who want a non-invasive inspection (no README/docs touched) can
+  // uncheck the box before clicking Run Init Audit.
+  const [auditGenerateDocs, setAuditGenerateDocs] = useState(true)
 
   useEffect(() => {
     getLlmProvider().then(setLlmProvider).catch(() => {})
@@ -987,7 +995,9 @@ export function ProjectDetailPage() {
     setError(null)
     setRunId(null) // unmount LiveAgentView before remounting with new run
     try {
-      const run = await createRun(projectId)
+      // Pass the user's choice through. The backend defaults this flag to
+      // true, so we always send an explicit value to keep behavior obvious.
+      const run = await createRun(projectId, { generateDocs: auditGenerateDocs })
       setRunId(run.run_id)
       setPastRuns((prev) => [
         {
@@ -1149,19 +1159,38 @@ export function ProjectDetailPage() {
                     </div>
                   )}
                   {(!runId || !activeRunStatus || ['done', 'error', 'skipped'].includes(activeRunStatus)) && (
-                    <button
-                      onClick={handleRunAudit}
-                      disabled={starting}
-                      className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-                    >
-                      {starting ? (
-                        <><span className="animate-spin">⟳</span> Starting…</>
-                      ) : runId ? (
-                        <><span>🔍</span> New Audit</>
-                      ) : (
-                        <><span>🔍</span> Run Init Audit</>
-                      )}
-                    </button>
+                    <>
+                      {/* Doc-generation toggle — sits inline with the Run
+                          button so the user sees their choice before they
+                          start. Checked = Reviewer also writes README.md
+                          (when missing/sparse) and docs/* technical files. */}
+                      <label
+                        className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none px-2 py-1 rounded-md hover:bg-gray-50 transition-colors"
+                        title="When checked, the Reviewer also writes README.md (if missing or sparse) and technical documentation files under docs/."
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          checked={auditGenerateDocs}
+                          onChange={(e) => setAuditGenerateDocs(e.target.checked)}
+                          disabled={starting}
+                        />
+                        <span>📝 Generate docs</span>
+                      </label>
+                      <button
+                        onClick={handleRunAudit}
+                        disabled={starting}
+                        className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+                      >
+                        {starting ? (
+                          <><span className="animate-spin">⟳</span> Starting…</>
+                        ) : runId ? (
+                          <><span>🔍</span> New Audit</>
+                        ) : (
+                          <><span>🔍</span> Run Init Audit</>
+                        )}
+                      </button>
+                    </>
                   )}
                 </div>
               }

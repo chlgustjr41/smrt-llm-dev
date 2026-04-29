@@ -82,6 +82,13 @@ desktop.ini
 
 # ─── Eval fixtures: keep fixture source committed, ignore agent-managed state ─
 eval-fixtures/*/.smrt/
+# Agent-generated docs/READMEs in fixtures — written by Reviewer during
+# evaluation runs, not part of the bug-plated baseline. Each fixture has its
+# own inner .git that already excludes these locally; this rule keeps them
+# out of the meta-repo too so a fresh clone always sees the clean fixture.
+eval-fixtures/*/docs/
+eval-fixtures/todo-api/README.md
+eval-fixtures/inventory-api/README.md
 eval-fixtures/wild/*
 !eval-fixtures/wild/README.md
 
